@@ -52,6 +52,16 @@ class SyscomConfig(models.Model):
         required=True,
         help='Porcentaje de ganancia para calcular el precio de venta'
     )
+    precios_en_dolares = fields.Boolean(
+        string='Precios en dólares',
+        default=False,
+        help='Marcar si los precios en el CSV están expresados en dólares y deben convertirse.'
+    )
+    tasa_cambio = fields.Float(
+        string='Tasa de cambio (USD → Moneda local)',
+        default=1.0,
+        help='Tasa para convertir precios en dólares a la moneda local. Usada cuando `Precios en dólares` está activado.'
+    )
 
     @api.model
     def get_config(self):
@@ -417,6 +427,8 @@ class SyscomConfig(models.Model):
     def _procesar_csv(self, filepath):
         """Procesar el archivo CSV e importar productos"""
         self.ensure_one()
+        # tasa leida del CSV (si existe). Se tomará la primera aparición.
+        tasa_csv = None
         # Parsear lista de categorías
         categorias_filtro = []
         if self.categorias_importar:
@@ -448,10 +460,18 @@ class SyscomConfig(models.Model):
                         if menu_nvl1 not in categorias_filtro:
                             continue
 
-                    # Extraer datos del CSV
-                    default_code = csv_row.get('Modelo', '').strip()
-                    name = csv_row.get('Título', '').strip()
-                    su_precio = csv_row.get('Su Precio', '0').strip()
+                        # Extraer datos del CSV
+                        default_code = csv_row.get('Modelo', '').strip()
+                        name = csv_row.get('Título', '').strip()
+                        su_precio = csv_row.get('Su Precio', '0').strip()
+                        tipo_cambio_str = csv_row.get('Tipo de Cambio', '').strip()
+                        # Si encontramos tipo de cambio en alguna fila, guardarlo (primera aparición)
+                        if tipo_cambio_str and not tasa_csv:
+                            try:
+                                tasa_csv = float(tipo_cambio_str.replace(',', ''))
+                                _logger.info(f"Tipo de Cambio detectado en CSV: {tasa_csv}")
+                            except Exception:
+                                _logger.warning(f"No se pudo parsear 'Tipo de Cambio' desde el CSV: {tipo_cambio_str}")
                     menu_nvl1 = csv_row.get('Menu Nvl 1', '').strip()
                     menu_nvl2 = csv_row.get('Menu Nvl 2', '').strip()
                     menu_nvl3 = csv_row.get('Menu Nvl 3', '').strip()
@@ -462,7 +482,12 @@ class SyscomConfig(models.Model):
 
                     # Calcular precios
                     try:
-                        standard_price = float(su_precio.replace(',', ''))
+                        price_raw = float(su_precio.replace(',', ''))
+                        if self.precios_en_dolares:
+                            tasa = tasa_csv if tasa_csv else (getattr(self, 'tasa_cambio', 1.0) or 1.0)
+                            standard_price = price_raw * tasa
+                        else:
+                            standard_price = price_raw
                         list_price = standard_price * (1 + self.ganancia_porcentaje / 100)
                     except ValueError:
                         _logger.warning(f'Precio inválido para producto {default_code}')
@@ -558,6 +583,24 @@ class SyscomConfig(models.Model):
 
             _logger.info(f'Importación completada: {productos_procesados} procesados, '
                          f'{productos_creados} creados, {productos_actualizados} actualizados')
+
+            # Registrar en bitácora el procesamiento y la tasa de cambio utilizada (si aplica)
+            try:
+                file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+                categorias_importadas = self.categorias_importar or '----'
+                tasa_log = tasa_csv if tasa_csv else (getattr(self, 'tasa_cambio', None) or 0.0)
+                self.env['syscom.log'].create({
+                    'fecha_descarga': fields.Datetime.now(),
+                    'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
+                    'ruta_archivo': filepath,
+                    'url_origen': self.syscom_url,
+                    'categorias_importadas': categorias_importadas,
+                    'tipo_accion': 'Procesar CSV',
+                    'tasa_cambio': tasa_log,
+                })
+                _logger.info(f'Syscom: Tasa de cambio registrada en bitácora: {tasa_log}')
+            except Exception:
+                _logger.exception('No se pudo registrar la tasa de cambio en la bitácora')
 
         except Exception as e:
             _logger.error(f'Error procesando CSV: {str(e)}')

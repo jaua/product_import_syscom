@@ -34,6 +34,10 @@ class SyscomLog(models.Model):
         string='Categorías importadas',
         required=True
     )
+    tasa_cambio = fields.Float(
+        string='Tasa de cambio',
+        help='Tasa de cambio usada durante la importación (USD → moneda local)'
+    )
     tipo_accion = fields.Char(
         string='Tipo de acción',
         required=True,

@@ -6,9 +6,9 @@
         <field name="arch" type="xml">
             <form string="Configuración Syscom">
                 <header>
-                    <button name="ejecutar_importacion" 
-                            string="Ejecutar Importación" 
-                            type="object" 
+                    <button name="ejecutar_importacion"
+                            string="Ejecutar Importación"
+                            type="object"
                             class="oe_highlight"
                             icon="fa-play"/>
                 </header>
@@ -20,10 +20,12 @@
                             <field name="hora_ejecucion" widget="float_time"/>
                         </group>
                         <group string="Configuración de Importación">
-                            <field name="categorias_importar" 
+                            <field name="categorias_importar"
                                    placeholder='"Computadoras", "Laptops", "Accesorios"'
                                    widget="text"/>
                             <field name="ganancia_porcentaje"/>
+                            <field name="precios_en_dolares"/>
+                            <field name="tasa_cambio"/>
                         </group>
                     </group>
                     <notebook>
