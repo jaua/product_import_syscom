@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_syscom_config,access_syscom_config,model_syscom_config,base.group_user,1,1,1,1
+access_syscom_log,access_syscom_log,model_syscom_log,base.group_user,1,0,0,0
+access_syscom_config_manager,access_syscom_config_manager,model_syscom_config,base.group_system,1,1,1,1
+access_syscom_log_manager,access_syscom_log_manager,model_syscom_log,base.group_system,1,1,1,1
+

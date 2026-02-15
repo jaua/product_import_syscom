@@ -1,0 +1,20 @@
+<odoo>
+<menuitem id="menu_syscom_root"
+    name="Proveedor Syscom"
+    parent="purchase.menu_purchase_config"
+    sequence="10"/>
+
+<!-- Submenú de Configuración -->
+<menuitem id="menu_syscom_config"
+    name="Configuración"
+    parent="menu_syscom_root"
+    action="action_syscom_config"
+    sequence="1"/>
+
+<!-- Submenú de Bitácora -->
+<menuitem id="menu_syscom_log"
+    name="Bitácora de Importaciones"
+    parent="menu_syscom_root"
+    action="action_syscom_log"
+    sequence="2"/>
+</odoo>

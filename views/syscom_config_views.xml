@@ -1,0 +1,79 @@
+<odoo>
+    <!-- Vista de formulario de configuración -->
+    <record id="view_syscom_config_form" model="ir.ui.view">
+        <field name="name">syscom.config.form</field>
+        <field name="model">syscom.config</field>
+        <field name="arch" type="xml">
+            <form string="Configuración Syscom">
+                <header>
+                    <button name="ejecutar_importacion" 
+                            string="Ejecutar Importación" 
+                            type="object" 
+                            class="oe_highlight"
+                            icon="fa-play"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Configuración de Descarga">
+                            <field name="syscom_url" placeholder="https://ejemplo.syscom.mx/productos.csv"/>
+                            <field name="periodo_segundos" widget="integer"/>
+                            <field name="hora_ejecucion" widget="float_time"/>
+                        </group>
+                        <group string="Configuración de Importación">
+                            <field name="categorias_importar" 
+                                   placeholder='"Computadoras", "Laptops", "Accesorios"'
+                                   widget="text"/>
+                            <field name="ganancia_porcentaje"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Información">
+                            <group>
+                                <p>
+                                    <strong>Instrucciones de uso:</strong>
+                                    <ul>
+                                        <li>Configure la URL del archivo CSV de Syscom</li>
+                                        <li>Defina el periodo entre descargas automáticas (en segundos)</li>
+                                        <li>Establezca la hora de ejecución automática diaria</li>
+                                        <li>Opcionalmente, filtre las categorías a importar</li>
+                                        <li>Configure el porcentaje de ganancia para calcular precios de venta</li>
+                                        <li>Use el botón "Ejecutar Importación" para una ejecución manual</li>
+                                    </ul>
+                                </p>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Vista de lista de configuración -->
+    <record id="view_syscom_config_list" model="ir.ui.view">
+        <field name="name">syscom.config.list</field>
+        <field name="model">syscom.config</field>
+        <field name="arch" type="xml">
+            <list string="Configuraciones Syscom">
+                <field name="syscom_url"/>
+                <field name="periodo_segundos"/>
+                <field name="hora_ejecucion" widget="float_time"/>
+                <field name="ganancia_porcentaje"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Acción para configuración -->
+    <record id="action_syscom_config" model="ir.actions.act_window">
+        <field name="name">Configuración Syscom</field>
+        <field name="res_model">syscom.config</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Configurar importación de productos Syscom
+            </p>
+            <p>
+                Configure los parámetros para la importación automática de productos desde Syscom.
+            </p>
+        </field>
+    </record>
+</odoo>

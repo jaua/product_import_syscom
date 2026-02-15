@@ -1,0 +1,55 @@
+<odoo>
+    <record id="view_syscom_log_list" model="ir.ui.view">
+        <field name="name">syscom.log.list</field>
+        <field name="model">syscom.log</field>
+        <field name="arch" type="xml">
+            <list string="Bitácora de Importaciones" create="false" edit="false">
+                <field name="fecha_descarga"/>
+                <field name="tamano_descarga"/>
+                <field name="ruta_archivo"/>
+                <field name="url_origen"/>
+                <field name="categorias_importadas"/>
+                <field name="tipo_accion"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Vista de formulario de bitácora -->
+    <record id="view_syscom_log_form" model="ir.ui.view">
+        <field name="name">syscom.log.form</field>
+        <field name="model">syscom.log</field>
+        <field name="arch" type="xml">
+            <form string="Detalle de Importación" create="false" edit="false">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="fecha_descarga"/>
+                            <field name="tamano_descarga"/>
+                        </group>
+                        <group>
+                            <field name="url_origen"/>
+                            <field name="ruta_archivo"/>
+                            <field name="categorias_importadas"/>
+                            <field name="tipo_accion"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Acción para bitácora -->
+    <record id="action_syscom_log" model="ir.actions.act_window">
+        <field name="name">Bitácora Syscom</field>
+        <field name="res_model">syscom.log</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_empty_folder">
+                No hay registros de importaciones
+            </p>
+            <p>
+                Aquí se mostrará el historial de todas las importaciones realizadas desde Syscom.
+            </p>
+        </field>
+    </record>
+</odoo>
