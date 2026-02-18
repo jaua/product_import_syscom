@@ -2,9 +2,13 @@
 # models/product_template.py
 # ===========================
 from odoo import models
+from odoo import fields, api
+
 
 class ProductTemplate(models.Model):
     _inherit = 'product.template'
+
+    syscom_url = fields.Text(string='URL', help='Enlace SYSCOM del producto importado.')
 
     def action_import_from_syscom(self):
         """Acción para importar desde Syscom"""

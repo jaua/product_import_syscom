@@ -24,8 +24,7 @@
                                    placeholder='"Computadoras", "Laptops", "Accesorios"'
                                    widget="text"/>
                             <field name="ganancia_porcentaje"/>
-                            <field name="precios_en_dolares"/>
-                            <field name="tasa_cambio"/>
+                            <field name="usd_a_mxn"/>
                         </group>
                     </group>
                     <notebook>

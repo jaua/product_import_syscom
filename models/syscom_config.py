@@ -1,3 +1,4 @@
+
 # ===========================
 # models/syscom_config.py
 # ===========================
@@ -18,7 +19,9 @@ _tiempo_espera_descarga = 300  # segundos
 _periodo_actualizaciones = 5  # tiempo en segundos para mostrar progreso de descarga
 _id_objetoimp = "02"  # variable global para asignar el id del objeto de impuesto a los productos importados
 _id_cat_unidad_medida = 1  # variable global para asignar la categoría de unidad de medida a los productos importados
+_categoria_separador = ' \ '  # Separador para construir la ruta de categorías anidadas
 _registros_por_batch = 5000  # cantidad de registros a procesar por batch en la creación de productos_
+
 
 class SyscomConfig(models.Model):
     _name = 'syscom.config'
@@ -52,15 +55,15 @@ class SyscomConfig(models.Model):
         required=True,
         help='Porcentaje de ganancia para calcular el precio de venta'
     )
-    precios_en_dolares = fields.Boolean(
-        string='Precios en dólares',
+    usd_a_mxn = fields.Boolean(
+        string='Convertir USD a MXN',
         default=False,
-        help='Marcar si los precios en el CSV están expresados en dólares y deben convertirse.'
+        help='Marcar si los precios en el CSV están en dólares y deben convertirse a MXN.'
     )
     tasa_cambio = fields.Float(
         string='Tasa de cambio (USD → Moneda local)',
         default=1.0,
-        help='Tasa para convertir precios en dólares a la moneda local. Usada cuando `Precios en dólares` está activado.'
+        help='Respaldo: tasa para convertir precios en USD a MXN si no se encuentre en el CSV.'
     )
 
     @api.model
@@ -134,6 +137,10 @@ class SyscomConfig(models.Model):
             _logger.info("Syscom: Procesando el archivo CSV: %s", archivo_path)
 
             self._procesar_csv(archivo_path)
+
+            # Si procesamos sin errores, limpiar archivos antiguos descargados
+            self._limpiar_archivos_antiguos(archivo_path)
+
             return {
                 'type': 'ir.actions.client',
                 'tag': 'display_notification',
@@ -144,15 +151,6 @@ class SyscomConfig(models.Model):
                     'sticky': False,
                     }
                 }
-            # Si procesamos sin errores, eliminar archivo previo si está configurado
-            archivo_path = last_log.ruta_archivo
-            if _elimiar_archivo_previo:
-                try:
-                    if os.path.exists(archivo_path):
-                        os.remove(archivo_path)
-                        _logger.info(f'Archivo temporal eliminado: {archivo_path}')
-                except Exception as e:
-                    _logger.warning(f'No se pudo eliminar el archivo temporal: {str(e)}')
         except Exception as e:
             _logger.error(f'Error en importación: {str(e)}')
             raise UserError(f'Error al importar productos: {str(e)}')
@@ -185,7 +183,7 @@ class SyscomConfig(models.Model):
             last_print_time = start_time
             last_print_size = 0
             total_size = 0
-            categorias_importadas = ''
+            lista_categorias_importadas = ''
 
             # Para mostrar en consola/registro
             def print_progress(current_size, total_size=None):
@@ -236,6 +234,7 @@ class SyscomConfig(models.Model):
 
             # obtener el tipo de contenido
             content_type = response.headers.get('Content-Type', '')
+
             # Obtener tamaño total si está disponible
             total_size = int(response.headers.get('content-length', 0))
 
@@ -256,7 +255,7 @@ class SyscomConfig(models.Model):
 
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'syscom_products_{timestamp}.csv'
-            filepath = os.path.join(download_dir, filename)
+            file_path = os.path.join(download_dir, filename)
 
             # Descargar por chunks con progreso
             downloaded = 0
@@ -264,7 +263,7 @@ class SyscomConfig(models.Model):
 
             _logger.info("🚀 Iniciando descarga...")
 
-            with open(filepath, 'wb') as f:
+            with open(file_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
@@ -283,41 +282,25 @@ class SyscomConfig(models.Model):
             - Tamaño: {downloaded / (1024*1024):.2f} MB
             - Tiempo total: {total_elapsed:.1f} segundos
             - Velocidad promedio: {avg_speed / (1024*1024):.2f} MB/s
-            - Ruta: {filepath}
+            - Ruta: {file_path}
             """)
             _logger.info("Syscom: Registro en bitacora.")
 
             # Registrar en bitácora
-            file_size = os.path.getsize(filepath)
-            categorias_importadas = self.get_config().categorias_importar
+            file_size = os.path.getsize(file_path)
+            lista_categorias_importadas = self.get_config().categorias_importar
             resultado = self.env['syscom.log'].create({
                 'fecha_descarga': fields.Datetime.now(),
                 'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
-                'ruta_archivo': filepath,
+                'ruta_archivo': file_path,
                 'url_origen': self.syscom_url,
-                'categorias_importadas': categorias_importadas,
+                'categorias_importadas': lista_categorias_importadas,
                 'tipo_accion': 'Descarga CSV',
             })
 
             _logger.info(f"Syscom: Registro creado en bitácora con ID {resultado.id} para la descarga realizada.")
 
-            # Mantener solo el archivo más reciente en el directorio de descargas.
-            try:
-                for fn in os.listdir(download_dir):
-                    full = os.path.join(download_dir, fn)
-                    if full == filepath:
-                        continue
-                    # Solo eliminar archivos que coincidan con el patrón de descargas de syscom
-                    if fn.startswith('syscom_products_') and fn.endswith('.csv'):
-                        try:
-                            os.remove(full)
-                            _logger.info(f'Removido archivo de descarga antiguo: {full}')
-                        except Exception as e:
-                            _logger.warning(f'No se pudo eliminar archivo antiguo {full}: {e}')
-            except Exception:
-                _logger.exception('Error al limpiar archivos antiguos en el directorio de descargas')
-
-            return filepath
+            return file_path
         except requests.RequestException as e:
             _logger.error(f"Error en descarga: {e}", exc_info=True)
             # Si existe un archivo previo válido, retornarlo para reutilización
@@ -346,6 +329,25 @@ class SyscomConfig(models.Model):
                 _logger.exception('Error al obtener archivo previo desde la bitácora')
 
             raise UserError(f'Error inesperado al descargar el archivo CSV: {str(e)}')
+
+    def _limpiar_archivos_antiguos(self, archivo_actual):
+        """Elimina archivos CSV descargados antiguos, manteniendo solo el actual."""
+        try:
+            download_dir = _ruta_descarga
+            _logger.info(f'Limpiando archivos antiguos en el directorio de descargas...')
+            for nombre_archivo in os.listdir(download_dir):
+                ruta_archivo = os.path.join(download_dir, nombre_archivo)
+                if ruta_archivo == archivo_actual:
+                    continue
+                # Solo eliminar archivos que coincidan con el patrón de descargas de syscom
+                if nombre_archivo.startswith('syscom_products_') and nombre_archivo.endswith('.csv'):
+                    try:
+                        os.remove(ruta_archivo)
+                        _logger.info(f'Removido archivo de descarga antiguo: {ruta_archivo}')
+                    except Exception as e:
+                        _logger.warning(f'No se pudo eliminar archivo antiguo {ruta_archivo}: {e}')
+        except Exception:
+            _logger.exception('Error al limpiar archivos antiguos en el directorio de descargas')
 
     def csv_limpiar(self, csv_path: str = '', mantener_respaldo: bool = False):
         """Limpiar el archivo de las fallas en la codificacion.
@@ -424,6 +426,50 @@ class SyscomConfig(models.Model):
 
         return ruta_archivo_entrada, ruta_archivo_respaldo
 
+    def _crear_categorias(self, csv_path):
+        """
+        Crea categorías anidadas a partir de un CSV con columnas:
+        'Menu Nvl 1', 'Menu Nvl 2', 'Menu Nvl 3'.
+        """
+        import csv
+        categorias_creadas = 0
+        categorias_map = {}  # {(nvl1, nvl2, nvl3): id}
+        with open(csv_path, 'r', encoding='utf-8-sig') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                nvl1 = row.get('Menu Nvl 1', '').strip()
+                nvl2 = row.get('Menu Nvl 2', '').strip()
+                nvl3 = row.get('Menu Nvl 3', '').strip()
+                parent_id = False
+                # Nivel 1
+                if nvl1:
+                    cat1 = self.env['product.category'].search([
+                        ('name', '=', nvl1), ('parent_id', '=', False)
+                        ], limit=1)
+                    if not cat1:
+                        cat1 = self.env['product.category'].create({'name': nvl1, 'parent_id': False})
+                        categorias_creadas += 1
+                    parent_id = cat1.id
+                # Nivel 2
+                if nvl2:
+                    cat2 = self.env['p_get_or_create_categoryroduct.category'].search([
+                        ('name', '=', nvl2), ('parent_id', '=', parent_id)
+                        ], limit=1)
+                    if not cat2:
+                        cat2 = self.env['product.category'].create({'name': nvl2, 'parent_id': parent_id})
+                        categorias_creadas += 1
+                    parent_id = cat2.id
+                # Nivel 3
+                if nvl3:
+                    cat3 = self.env['product.category'].search([
+                        ('name', '=', nvl3), ('parent_id', '=', parent_id)
+                        ], limit=1)
+                    if not cat3:
+                        cat3 = self.env['product.category'].create({'name': nvl3, 'parent_id': parent_id})
+                        categorias_creadas += 1
+        _logger.info(f"Categorías creadas o existentes: {categorias_creadas}")
+        return categorias_creadas
+
     def _procesar_csv(self, filepath):
         """Procesar el archivo CSV e importar productos"""
         self.ensure_one()
@@ -460,22 +506,25 @@ class SyscomConfig(models.Model):
                         if menu_nvl1 not in categorias_filtro:
                             continue
 
-                        # Extraer datos del CSV
-                        default_code = csv_row.get('Modelo', '').strip()
-                        name = csv_row.get('Título', '').strip()
-                        su_precio = csv_row.get('Su Precio', '0').strip()
-                        tipo_cambio_str = csv_row.get('Tipo de Cambio', '').strip()
-                        # Si encontramos tipo de cambio en alguna fila, guardarlo (primera aparición)
-                        if tipo_cambio_str and not tasa_csv:
-                            try:
-                                tasa_csv = float(tipo_cambio_str.replace(',', ''))
-                                _logger.info(f"Tipo de Cambio detectado en CSV: {tasa_csv}")
-                            except Exception:
-                                _logger.warning(f"No se pudo parsear 'Tipo de Cambio' desde el CSV: {tipo_cambio_str}")
+                    # Extraer datos del CSV
+                    default_code = csv_row.get('Modelo', '').strip()
+                    name = csv_row.get('Título', '').strip()
+                    su_precio = csv_row.get('Su Precio', '0').strip()
+                    tipo_cambio_str = csv_row.get('Tipo de Cambio', '').strip()
+
+                    # Si encontramos tipo de cambio en alguna fila, guardarlo (primera aparición)
+                    if tipo_cambio_str and not tasa_csv:
+                        try:
+                            tasa_csv = float(tipo_cambio_str.replace(',', ''))
+                            _logger.info(f"Tipo de Cambio detectado en CSV: {tasa_csv}")
+                        except Exception:
+                            _logger.warning(f"No se pudo parsear 'Tipo de Cambio' desde el CSV: {tipo_cambio_str}")
+
                     menu_nvl1 = csv_row.get('Menu Nvl 1', '').strip()
                     menu_nvl2 = csv_row.get('Menu Nvl 2', '').strip()
                     menu_nvl3 = csv_row.get('Menu Nvl 3', '').strip()
                     clave_producto = csv_row.get('Código Fiscal', '').strip()
+                    link_syscom = csv_row.get('Link SYSCOM', '').strip()
 
                     if not default_code or not name:
                         continue
@@ -483,7 +532,7 @@ class SyscomConfig(models.Model):
                     # Calcular precios
                     try:
                         price_raw = float(su_precio.replace(',', ''))
-                        if self.precios_en_dolares:
+                        if self.usd_a_mxn:
                             tasa = tasa_csv if tasa_csv else (getattr(self, 'tasa_cambio', 1.0) or 1.0)
                             standard_price = price_raw * tasa
                         else:
@@ -494,14 +543,14 @@ class SyscomConfig(models.Model):
                         continue
 
                     # Construir categoría
-                    categoria_path = ' / '.join(filter(None, [menu_nvl1, menu_nvl2, menu_nvl3]))
+                    list_categoria_path = [menu_nvl1, menu_nvl2, menu_nvl3]
 
                     rows_data.append({
                         'default_code': default_code,
                         'name': name,
                         'standard_price': standard_price,
                         'list_price': list_price,
-                        'categoria_path': categoria_path,
+                        'categoria_path': list_categoria_path,
                         'objetoimp': _id_objetoimp,
                         'cat_unidad_medida': _id_cat_unidad_medida,
                         'clave_producto': clave_producto,
@@ -520,7 +569,7 @@ class SyscomConfig(models.Model):
             # Procesar los datos recolectados
             for row_data in rows_data:
                 default_code = row_data['default_code']
-                categoria = self._get_or_create_category(row_data['categoria_path'])
+                categoria = self._get_or_create_category_from_parts(row_data['categoria_path'])
 
                 if default_code in productos_existentes:
                     # Producto existe - preparar para actualización
@@ -544,6 +593,7 @@ class SyscomConfig(models.Model):
                         'cat_unidad_medida': row_data['cat_unidad_medida'],
                         'clave_producto': row_data['clave_producto'],
                         'objetoimp': row_data['objetoimp'],
+                        'syscom_url': link_syscom,
                     })
 
                 productos_procesados += 1
@@ -622,18 +672,28 @@ class SyscomConfig(models.Model):
             _logger.error(f'Error al asignar impuestos: {str(e)}')
             raise UserError(f'Error al asignar impuestos al producto: {str(e)}')
 
-    def _get_or_create_category(self, categoria_path):
-        """Obtener o crear categoría de producto"""
-        if not categoria_path:
+    def _get_or_create_category_from_parts(self, parts_list):
+        """Obtener o crear categoría desde lista de partes ya separadas
+
+        Args:
+            parts_list: Lista de strings con cada nivel ['Nivel1', 'Nivel2', 'Nivel3']
+
+        Returns:
+            Registro de product.category o None
+        """
+        if not parts_list:
             return None
 
-        parts = [p.strip() for p in categoria_path.split('/')]
+        # Filtrar partes vacías
+        parts = [p.strip() for p in parts_list if p and p.strip()]
+
+        if not parts:
+            return None
+
         parent_id = False
+        categoria = None
 
         for part in parts:
-            if not part:
-                continue
-
             categoria = self.env['product.category'].search([
                 ('name', '=', part),
                 ('parent_id', '=', parent_id)
@@ -647,7 +707,7 @@ class SyscomConfig(models.Model):
 
             parent_id = categoria.id
 
-        return self.env['product.category'].browse(parent_id)
+        return categoria
 
     @api.model
     def cron_importar_syscom(self):
