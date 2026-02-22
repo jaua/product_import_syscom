@@ -4,11 +4,6 @@
     parent="purchase.menu_purchase_config"
     sequence="10"/>
 
-<menuitem id="menu_syscom_root"
-    name="Proveedor Syscom"
-    parent="sales.menu_sales_config"
-    sequence="10"/>
-
 <!-- Submenú de Configuración -->
 <menuitem id="menu_syscom_config"
     name="Configuración"
@@ -22,4 +17,16 @@
     parent="menu_syscom_root"
     action="action_syscom_log"
     sequence="2"/>
+
+<menuitem id="menu_syscom_root_sale"
+    name="Proveedor Syscom"
+    parent="sale.menu_sale_config"
+    sequence="100"/>
+
+<menuitem id="menu_syscom_config_sale"
+    name="Configuración"
+    parent="menu_syscom_root_sale"
+    action="action_syscom_config"
+    sequence="1"/>
+
 </odoo>

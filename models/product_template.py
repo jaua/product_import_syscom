@@ -2,7 +2,7 @@
 # models/product_template.py
 # ===========================
 from odoo import models
-from odoo import fields, api
+from odoo import fields
 
 
 class ProductTemplate(models.Model):
