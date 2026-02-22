@@ -2,7 +2,7 @@
 # __manifest__.py
 # ===========================
 {
-    'name': 'Syscom Importadpr de productos',
+    'name': 'Syscom Importador de productos',
     'version': '1.0',
     'category': 'Purchases',
     'summary': 'Importación automática de productos desde Syscom',
@@ -25,6 +25,5 @@
         'data/ir_cron_data.xml',
     ],
     'installable': True,
-    'application': True,
     'auto_install': False,
 }
