@@ -14,6 +14,8 @@ import shutil
 _logger = logging.getLogger(__name__)
 _ruta_descarga = "/tmp/syscom_downloads"
 _archivo_prueba = f"{_ruta_descarga}/verifica.txt"
+_archivo_csv_prefijo = "syscom_products_"
+_archivo_csv_extension = ".csv"
 _elimiar_archivo_previo = True
 _tiempo_espera_descarga = 300  # segundos
 _periodo_actualizaciones = 5  # tiempo en segundos para mostrar progreso de descarga
@@ -21,7 +23,8 @@ _id_objetoimp = "02"  # variable global para asignar el id del objeto de impuest
 _id_cat_unidad_medida = 1  # variable global para asignar la categoría de unidad de medida a los productos importados
 _categoria_separador = ' \ '  # Separador para construir la ruta de categorías anidadas
 _registros_por_batch = 5000  # cantidad de registros a procesar por batch en la creación de productos_
-
+_mxn_valor = 1.0  # Valor de respaldo para convertir USD a MXN si no se encuentra en el CSV o en la configuración
+_digitos_redondeo = 2  # Cantidad de dígitos para redondear la tasa de cambio al actualizarla desde el CSV o al calcular precios
 
 class SyscomConfig(models.Model):
     _name = 'syscom.config'
@@ -173,11 +176,16 @@ class SyscomConfig(models.Model):
             previous_log = self.env['syscom.log'].search([
                 ('tipo_accion', '=', 'Descarga CSV')
             ], limit=1, order='fecha_descarga desc')
+
             previous_file = None
             if previous_log and previous_log.ruta_archivo and os.path.exists(previous_log.ruta_archivo):
                 previous_file = previous_log.ruta_archivo
                 _logger.info(f"Syscom: Archivo previo disponible para respaldo: {previous_file}")
 
+            # actualizar la propiedad tipo de tasa de cambio con la presente en currency "base.USD"
+            self.get_config().tasa_cambio = round((_mxn_valor /
+                                                   self.env.ref('base.USD').rate),
+                                                  _digitos_redondeo)
             # Iniciar tiempo de descarga
             start_time = datetime.now()
             last_print_time = start_time
@@ -254,7 +262,7 @@ class SyscomConfig(models.Model):
             os.makedirs(download_dir, exist_ok=True)
 
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'syscom_products_{timestamp}.csv'
+            filename = f'{_archivo_csv_prefijo}{timestamp}{_archivo_csv_extension}'
             file_path = os.path.join(download_dir, filename)
 
             # Descargar por chunks con progreso
@@ -305,29 +313,21 @@ class SyscomConfig(models.Model):
             _logger.error(f"Error en descarga: {e}", exc_info=True)
             # Si existe un archivo previo válido, retornarlo para reutilización
             try:
-                previous_log = self.env['syscom.log'].search([
-                    ('tipo_accion', '=', 'Descarga CSV')
-                ], limit=1, order='fecha_descarga desc')
                 if previous_log and previous_log.ruta_archivo and os.path.exists(previous_log.ruta_archivo):
                     _logger.warning('Fallo la descarga; se devolverá el archivo previo desde la bitácora para su reutilización.')
                     return previous_log.ruta_archivo
             except Exception:
                 _logger.exception('Error al obtener archivo previo desde la bitácora')
-
             raise UserError(f'Error al descargar el archivo CSV: {str(e)}')
         except Exception as e:
             _logger.error(f"Error inesperado en descarga: {e}", exc_info=True)
             # En caso de error inesperado, intentar retornar archivo previo si existe
             try:
-                previous_log = self.env['syscom.log'].search([
-                    ('tipo_accion', '=', 'Descarga CSV')
-                ], limit=1, order='fecha_descarga desc')
                 if previous_log and previous_log.ruta_archivo and os.path.exists(previous_log.ruta_archivo):
                     _logger.warning('Error inesperado; se devolverá el archivo previo desde la bitácora para su reutilización.')
                     return previous_log.ruta_archivo
             except Exception:
                 _logger.exception('Error al obtener archivo previo desde la bitácora')
-
             raise UserError(f'Error inesperado al descargar el archivo CSV: {str(e)}')
 
     def _limpiar_archivos_antiguos(self, archivo_actual):
@@ -433,7 +433,7 @@ class SyscomConfig(models.Model):
         """
         import csv
         categorias_creadas = 0
-        categorias_map = {}  # {(nvl1, nvl2, nvl3): id}
+        # categorias_map = {}  # {(nvl1, nvl2, nvl3): id}
         with open(csv_path, 'r', encoding='utf-8-sig') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
