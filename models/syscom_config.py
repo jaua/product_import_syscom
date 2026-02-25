@@ -16,6 +16,8 @@ _ruta_descarga = "/tmp/syscom_downloads"
 _archivo_prueba = f"{_ruta_descarga}/verifica.txt"
 _archivo_csv_prefijo = "syscom_products_"
 _archivo_csv_extension = ".csv"
+_archivo_bitacora_precios = f"{_ruta_descarga}/syscom_precios_bitacora.txt"
+_usar_bitacora_precios = True  # Variable para controlar el uso de la bitácora de precios
 _elimiar_archivo_previo = True
 _tiempo_espera_descarga = 300  # segundos
 _periodo_actualizaciones = 5  # tiempo en segundos para mostrar progreso de descarga
@@ -25,6 +27,18 @@ _categoria_separador = ' \ '  # Separador para construir la ruta de categorías 
 _registros_por_batch = 5000  # cantidad de registros a procesar por batch en la creación de productos_
 _mxn_valor = 1.0  # Valor de respaldo para convertir USD a MXN si no se encuentra en el CSV o en la configuración
 _digitos_redondeo = 2  # Cantidad de dígitos para redondear la tasa de cambio al actualizarla desde el CSV o al calcular precios
+
+
+# Funcion de bitacora a archivo de texto (opcional, se puede usar solo el modelo syscom.log para registrar eventos)
+def registrar_bitacora(mensaje):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        os.makedirs(_ruta_descarga, exist_ok=True)
+        with open(_archivo_bitacora_precios, 'a') as f:
+            f.write(f'[{timestamp}] {mensaje}\n')
+    except Exception as e:
+        _logger.error(f'Error al registrar en bitácora de precios: {str(e)}')
+
 
 class SyscomConfig(models.Model):
     _name = 'syscom.config'
@@ -222,7 +236,7 @@ class SyscomConfig(models.Model):
 
                 if should_print:
                     _logger.info(
-                        f"📥 Descargando: {progress_msg} | "
+                        f"Descargando: {progress_msg} | "
                         f"Velocidad: {speed_mbps:.2f} MB/s | "
                         f"Tiempo: {elapsed:.0f}s"
                     )
@@ -304,6 +318,7 @@ class SyscomConfig(models.Model):
                 'url_origen': self.syscom_url,
                 'categorias_importadas': lista_categorias_importadas,
                 'tipo_accion': 'Descarga CSV',
+                'tasa_cambio': "0.0",  # Se actualizará con la tasa real al procesar el CSV, si se encuentra en él
             })
 
             _logger.info(f"Syscom: Registro creado en bitácora con ID {resultado.id} para la descarga realizada.")
@@ -420,6 +435,7 @@ class SyscomConfig(models.Model):
                 'url_origen': ruta_archivo_entrada,
                 'categorias_importadas': '----',
                 'tipo_accion': 'Limpiar archivo CSV',
+                'tasa_cambio': "0.0",
             })
 
         _logger.info(f"Syscom: Registro creado en bitácora con ID {resultado.id} para la limpieza realizada.")
@@ -474,7 +490,7 @@ class SyscomConfig(models.Model):
         """Procesar el archivo CSV e importar productos"""
         self.ensure_one()
         # tasa leida del CSV (si existe). Se tomará la primera aparición.
-        tasa_csv = None
+        tipo_cambio_csv = None
         # Parsear lista de categorías
         categorias_filtro = []
         if self.categorias_importar:
@@ -492,7 +508,7 @@ class SyscomConfig(models.Model):
         productos_crear_vals = []
         codigos_procesar = []
 
-        _logger.info(f'Starting CSV processing from file: {filepath}')
+        _logger.info(f'Iniciar procesado de CSV desde archivo: {filepath}')
         try:
             # Primera pasada: recolectar datos del CSV
             rows_data = []
@@ -513,10 +529,10 @@ class SyscomConfig(models.Model):
                     tipo_cambio_str = csv_row.get('Tipo de Cambio', '').strip()
 
                     # Si encontramos tipo de cambio en alguna fila, guardarlo (primera aparición)
-                    if tipo_cambio_str and not tasa_csv:
+                    if tipo_cambio_str and not tipo_cambio_csv:
                         try:
-                            tasa_csv = float(tipo_cambio_str.replace(',', ''))
-                            _logger.info(f"Tipo de Cambio detectado en CSV: {tasa_csv}")
+                            tipo_cambio_csv = round(float(tipo_cambio_str.replace(',', '')), 2)
+                            _logger.info(f"Tipo de Cambio detectado en CSV: {tipo_cambio_csv}")
                         except Exception:
                             _logger.warning(f"No se pudo parsear 'Tipo de Cambio' desde el CSV: {tipo_cambio_str}")
 
@@ -533,11 +549,11 @@ class SyscomConfig(models.Model):
                     try:
                         price_raw = float(su_precio.replace(',', ''))
                         if self.usd_a_mxn:
-                            tasa = tasa_csv if tasa_csv else (getattr(self, 'tasa_cambio', 1.0) or 1.0)
-                            standard_price = price_raw * tasa
+                            tasa = tipo_cambio_csv if tipo_cambio_csv else (getattr(self, 'tasa_cambio', 1.0) or 1.0)
+                            standard_price = round(price_raw * tasa, 2)
                         else:
-                            standard_price = price_raw
-                        list_price = standard_price * (1 + self.ganancia_porcentaje / 100)
+                            standard_price = round(price_raw, 2)
+                        list_price = round(standard_price * (1 + (self.ganancia_porcentaje / 100)), 2)
                     except ValueError:
                         _logger.warning(f'Precio inválido para producto {default_code}')
                         continue
@@ -604,6 +620,14 @@ class SyscomConfig(models.Model):
                 _logger.info(f'Actualizando {len(productos_actualizar)} productos en batch...')
                 for product_id, values in productos_actualizar.items():
                     self.env['product.template'].browse(product_id).write(values)
+                    # grabar en bitácora externa de precios el producto actualizado y su nuevo precio
+                    if (_usar_bitacora_precios is False):
+                        continue
+                    try:
+                        product = self.env['product.template'].browse(product_id)
+                        registrar_bitacora(f"Producto actualizado: {product.default_code} - Nuevo precio: {values.get('list_price', 'N/A')}")
+                    except Exception as e:
+                        _logger.error(f'Error al registrar bitácora de producto actualizado: {e}')
                 productos_actualizados = len(productos_actualizar)
 
             # Crear nuevos productos en batches (grupos de 5000)
@@ -616,7 +640,12 @@ class SyscomConfig(models.Model):
                     try:
                         created_chunk = self.env['product.template'].create(chunk)
                         created_records |= created_chunk
-                        _logger.info(f'Batch de productos creado: {len(created_chunk)} productos (offset {i})')
+
+                        # Registrar en bitácora externa de precios los productos creados
+                        if (_usar_bitacora_precios is False):
+                            continue
+                        for product in created_chunk:
+                            registrar_bitacora(f"Producto creado: {product.default_code} - Precio: {product.list_price}")
                     except Exception as e:
                         _logger.error(f'Error creando batch de productos (offset {i}): {e}', exc_info=True)
 
@@ -638,7 +667,7 @@ class SyscomConfig(models.Model):
             try:
                 file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
                 categorias_importadas = self.categorias_importar or '----'
-                tasa_log = tasa_csv if tasa_csv else (getattr(self, 'tasa_cambio', None) or 0.0)
+                tasa_log = tipo_cambio_csv if tipo_cambio_csv else (getattr(self, 'tasa_cambio', None) or 0.0)
                 self.env['syscom.log'].create({
                     'fecha_descarga': fields.Datetime.now(),
                     'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
