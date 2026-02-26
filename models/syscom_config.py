@@ -149,7 +149,7 @@ class SyscomConfig(models.Model):
                 _elimiar_archivo_previo = False  # No eliminaremos el archivo previo si el nuevo no es válido
                 raise ValueError("No se descargo el csv correctamente.")
 
-            self.csv_limpiar(archivo_path, mantener_respaldo=True)
+            self.csv_limpiar_pd(archivo_path, mantener_respaldo=True)
 
             _logger.info("Syscom: Procesando el archivo CSV: %s", archivo_path)
 
@@ -363,6 +363,41 @@ class SyscomConfig(models.Model):
                         _logger.warning(f'No se pudo eliminar archivo antiguo {ruta_archivo}: {e}')
         except Exception:
             _logger.exception('Error al limpiar archivos antiguos en el directorio de descargas')
+
+    def csv_limpiar_pd(self, csv_path='', mantener_respaldo=False):
+        csv_path = csv_path or self._ruta_archivo_csv
+        ruta_salida = csv_path + ".tmp"
+        ruta_respaldo = csv_path + "_bak"
+
+        _logger.info(f"Limpiando archivo Syscom: {csv_path}")
+
+        # Paso 1: Intentar detectar si es Latin-1 o UTF-8 y limpiar
+        try:
+            # Abrimos con 'errors=replace' para que Python haga el trabajo sucio
+            # Probamos con 'latin-1' que es el culpable común en Syscom/México
+            with open(csv_path, 'r', encoding='latin-1', errors='replace') as f_in:
+                with open(ruta_salida, 'w', encoding='utf-8') as f_out:
+                    for linea in f_in:
+                        # Al escribir en utf-8, el archivo queda estandarizado
+                        f_out.write(linea)
+
+            # Paso 2: Swapping de archivos
+            shutil.copy(csv_path, ruta_respaldo)
+            shutil.move(ruta_salida, csv_path)
+
+            # Paso 3: Log en Odoo
+            file_size = os.path.getsize(csv_path)
+            self.env['syscom.log'].create({
+                'fecha_descarga': fields.Datetime.now(),
+                'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
+                'ruta_archivo': csv_path,
+                'tipo_accion': 'Limpieza Exitosa (Latin-1 to UTF-8)',
+            })
+
+            return csv_path, ruta_respaldo
+
+        except Exception as e:
+            raise UserError(f'Error fatal al limpiar CSV: {str(e)}')
 
     def csv_limpiar(self, csv_path: str = '', mantener_respaldo: bool = False):
         """Limpiar el archivo de las fallas en la codificacion.
