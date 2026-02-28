@@ -106,7 +106,10 @@ class SyscomConfig(models.Model):
             _logger.info("Syscom: Verificando última descarga en bitácora...")
 
             # 2. Verificar última descarga en bitácora
-            last_log = self.env['syscom.log'].search([], limit=1, order='fecha_descarga desc')
+            last_log = self.env['syscom.log'].search(
+                [('tipo_accion', '=', 'Descarga CSV')],
+                limit=1,
+                order='fecha_descarga desc')
             now = datetime.now()
 
             path_archivo_previo = last_log.ruta_archivo if last_log else ""

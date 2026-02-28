@@ -53,6 +53,6 @@ def normaliza_csv(ruta_de_entrada: str, ruta_de_salida: str) -> None:
 
             file_out.write(line)
 
-    _logger.info(f"\n   Archivo normalizado: {ruta_de_salida}")
-    _logger.info(f"   Líneas re-codificadas desde Latin-1 : {lineas_corregidas}")
-    _logger.info(f"   Líneas con sustitución U+FFFD       : {lineas_reemplazadas}")
+    _logger.info(f"\nArchivo normalizado: {ruta_de_salida}")
+    _logger.info(f"Líneas re-codificadas desde Latin-1 : {lineas_corregidas}")
+    _logger.info(f"Líneas con sustitución U+FFFD       : {lineas_reemplazadas}")
