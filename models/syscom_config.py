@@ -5,11 +5,13 @@
 from odoo import models, fields, api
 from odoo.exceptions import UserError
 from datetime import datetime
+from .csv_utilerias import  normaliza_csv
 import requests
 import csv
 import os
 import logging
 import shutil
+import pandas as pd
 
 _logger = logging.getLogger(__name__)
 _ruta_descarga = "/tmp/syscom_downloads"
@@ -100,6 +102,7 @@ class SyscomConfig(models.Model):
             diferencia = 3600  # Valor inicial alto
             path_archivo_previo = ""
             reutilizar_archivo = False
+            no_usado = None
 
             _logger.info("Syscom: Verificando última descarga en bitácora...")
 
@@ -149,7 +152,7 @@ class SyscomConfig(models.Model):
                 _elimiar_archivo_previo = False  # No eliminaremos el archivo previo si el nuevo no es válido
                 raise ValueError("No se descargo el csv correctamente.")
 
-            self.csv_limpiar_pd(archivo_path, mantener_respaldo=True)
+            archivo_path, no_usado = self.csv_limpiar(archivo_path, mantener_respaldo=True)
 
             _logger.info("Syscom: Procesando el archivo CSV: %s", archivo_path)
 
@@ -364,118 +367,36 @@ class SyscomConfig(models.Model):
         except Exception:
             _logger.exception('Error al limpiar archivos antiguos en el directorio de descargas')
 
-    def csv_limpiar_pd(self, csv_path='', mantener_respaldo=False):
-        csv_path = csv_path or self._ruta_archivo_csv
-        ruta_salida = csv_path + ".tmp"
-        ruta_respaldo = csv_path + "_bak"
+    def csv_limpiar(self, ruta_csv_inicial='', mantener_respaldo=False):
+        ruta_csv_inicial = ruta_csv_inicial or self._ruta_archivo_csv
+        ruta_csv_salida = ruta_csv_inicial + ".tmp"
+        ruta_csv_respaldo = ruta_csv_inicial + "_bak"
 
-        _logger.info(f"Limpiando archivo Syscom: {csv_path}")
+        _logger.info(f"Limpiando archivo Syscom: {ruta_csv_inicial}")
 
-        # Paso 1: Intentar detectar si es Latin-1 o UTF-8 y limpiar
+        # Paso 1: Normalizar el archivo CSV utilizando la función normaliza_csv
         try:
-            # Abrimos con 'errors=replace' para que Python haga el trabajo sucio
-            # Probamos con 'latin-1' que es el culpable común en Syscom/México
-            with open(csv_path, 'r', encoding='latin-1', errors='replace') as f_in:
-                with open(ruta_salida, 'w', encoding='utf-8') as f_out:
-                    for linea in f_in:
-                        # Al escribir en utf-8, el archivo queda estandarizado
-                        f_out.write(linea)
-
+            normaliza_csv(ruta_csv_inicial, ruta_csv_salida)
             # Paso 2: Swapping de archivos
-            shutil.copy(csv_path, ruta_respaldo)
-            shutil.move(ruta_salida, csv_path)
+            shutil.copy(ruta_csv_inicial, ruta_csv_respaldo)
+            shutil.move(ruta_csv_salida, ruta_csv_inicial)
 
             # Paso 3: Log en Odoo
-            file_size = os.path.getsize(csv_path)
+            file_size = os.path.getsize(ruta_csv_inicial)
             self.env['syscom.log'].create({
                 'fecha_descarga': fields.Datetime.now(),
                 'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
-                'ruta_archivo': csv_path,
-                'tipo_accion': 'Limpieza Exitosa (Latin-1 to UTF-8)',
-            })
-
-            return csv_path, ruta_respaldo
-
-        except Exception as e:
-            raise UserError(f'Error fatal al limpiar CSV: {str(e)}')
-
-    def csv_limpiar(self, csv_path: str = '', mantener_respaldo: bool = False):
-        """Limpiar el archivo de las fallas en la codificacion.
-
-        Debido a que algunos caracteres no siguen un
-        estandar de contunuidad de los estadares UTF-8.
-        Retorna un array con el path del archivo limpio y el archivo de
-        respaldo.
-        """
-        if csv_path == "":
-            csv_path = self._ruta_archivo_csv
-        ruta_archivo_entrada = csv_path
-        ruta_archivo_salida = csv_path + "_"
-        ruta_archivo_respaldo = csv_path + "_bak"
-
-        _logger.info(f"Limpiando archivo CSV: {ruta_archivo_entrada}")
-        with open(ruta_archivo_entrada, 'rb') as archivo_entrada, \
-             open(ruta_archivo_salida, 'w', encoding='utf-8') as archivo_salida:
-            conteo_lineas = 0
-            conteo_fallas = 0
-            salta = False
-            linea = "\n".encode("utf-8")
-            while True:
-                try:
-                    if not salta:
-                        linea = archivo_entrada.readline()
-                    else:
-                        salta = False
-                    linea_limpia = linea.decode("utf-8")
-                except UnicodeDecodeError as err:
-                    _logger.warning(f"Caracter no decodificable encontrado en línea {conteo_lineas + 1}, eliminando carácter problemático.")
-                    inicio = err.start
-                    ln_temporal = linea
-                    parte_inicial = ln_temporal[0:inicio - 1]
-                    parte_secundaria = ln_temporal[inicio + 1:]
-                    ln_temporal = parte_inicial + parte_secundaria
-                    linea = ln_temporal
-                    salta = True
-                    conteo_fallas += 1
-                    continue
-                except Exception as e:
-                    _logger.error(f"Error inesperado al limpiar línea {conteo_lineas + 1}: {str(e)}")
-                    raise UserError(f'Error inesperado al limpiar el archivo CSV: {str(e)}')
-                if not linea:
-                    _logger.info("Fin del archivo alcanzado.")
-                    break
-                archivo_salida.write(linea_limpia)
-                conteo_lineas += 1
-
-        _logger.info(f"Archivo CSV corregido. Total de líneas procesadas: {conteo_lineas}")
-        _logger.info(f"Total de caracteres problemáticos encontrados y eliminados: {conteo_fallas}")
-        _logger.info(f"Respaldo del archivo original creado en: {ruta_archivo_respaldo}")
-
-        try:
-            _logger.info(f"Copiando archivo de entrada a respaldo: {ruta_archivo_entrada} -> {ruta_archivo_respaldo}")
-            shutil.copy(ruta_archivo_entrada, ruta_archivo_respaldo)
-            _logger.info(f"Reemplazando archivo original con el archivo limpio: {ruta_archivo_salida} -> {ruta_archivo_entrada}")
-            shutil.move(ruta_archivo_salida, ruta_archivo_entrada)
-        except Exception as e:
-            _logger.error(f"Error al reemplazar el archivo original: {str(e)}")
-            raise UserError(f'Error al limpiar el archivo CSV: {str(e)}')
-
-        _logger.info(f"Registrando limpieza en bitacora.")
-        file_size = os.path.getsize(ruta_archivo_entrada)
-
-        resultado = self.env['syscom.log'].create({
-                'fecha_descarga': fields.Datetime.now(),
-                'tamano_descarga': f'{file_size / (1024 * 1024)} MB',
-                'ruta_archivo': ruta_archivo_entrada,
-                'url_origen': ruta_archivo_entrada,
+                'ruta_archivo': ruta_csv_inicial,
+                'url_origen': ruta_csv_inicial,
+                'tipo_accion': 'Limpieza Exitosa normalizando el archivo a utf8',
                 'categorias_importadas': '----',
-                'tipo_accion': 'Limpiar archivo CSV',
                 'tasa_cambio': "0.0",
             })
 
-        _logger.info(f"Syscom: Registro creado en bitácora con ID {resultado.id} para la limpieza realizada.")
+            return ruta_csv_inicial, ruta_csv_respaldo
 
-        return ruta_archivo_entrada, ruta_archivo_respaldo
+        except Exception as e:
+            raise UserError(f'Error fatal al limpiar CSV, funcion csv_limpiar_pd: {str(e)}')
 
     def _crear_categorias(self, csv_path):
         """
