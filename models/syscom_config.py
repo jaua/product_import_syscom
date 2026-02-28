@@ -11,7 +11,6 @@ import csv
 import os
 import logging
 import shutil
-import pandas as pd
 
 _logger = logging.getLogger(__name__)
 _ruta_descarga = "/tmp/syscom_downloads"
