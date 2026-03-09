@@ -9,6 +9,7 @@ class ProductTemplate(models.Model):
     _inherit = 'product.template'
 
     syscom_url = fields.Text(string='URL', help='Enlace SYSCOM del producto importado.')
+    syscom_url_image = fields.Text(string='URL Imagen', help='Enlace SYSCOM de la imagen del producto importado.')
 
     def action_import_from_syscom(self):
         """Acción para importar desde Syscom"""

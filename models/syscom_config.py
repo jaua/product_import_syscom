@@ -13,6 +13,7 @@ import logging
 import shutil
 
 _logger = logging.getLogger(__name__)
+_proveedor_nombre = "Syscom"  # Nombre del proveedor para asociar a los productos importados
 _ruta_descarga = "/tmp/syscom_downloads"
 _archivo_prueba = f"{_ruta_descarga}/verifica.txt"
 _archivo_csv_prefijo = "syscom_products_"
@@ -28,10 +29,10 @@ _categoria_separador = ' \ '  # Separador para construir la ruta de categorías 
 _registros_por_batch = 5000  # cantidad de registros a procesar por batch en la creación de productos_
 _mxn_valor = 1.0  # Valor de respaldo para convertir USD a MXN si no se encuentra en el CSV o en la configuración
 _digitos_redondeo = 2  # Cantidad de dígitos para redondear la tasa de cambio al actualizarla desde el CSV o al calcular precios
-
+_sin_marca_nombre = "S/M"  # Nombre de marca por defecto para productos sin marca especificada
 
 # Funcion de bitacora a archivo de texto (opcional, se puede usar solo el modelo syscom.log para registrar eventos)
-def registrar_bitacora(mensaje):
+def registrar_bitacora_precios(mensaje):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     try:
         os.makedirs(_ruta_descarga, exist_ok=True)
@@ -304,7 +305,7 @@ class SyscomConfig(models.Model):
             avg_speed = downloaded / total_elapsed if total_elapsed > 0 else 0
 
             _logger.info(f"""
-            ✅ DESCARGA COMPLETADA:
+            DESCARGA COMPLETADA:
             - Archivo: {filename}
             - Tamaño: {downloaded / (1024*1024):.2f} MB
             - Tiempo total: {total_elapsed:.1f} segundos
@@ -357,10 +358,13 @@ class SyscomConfig(models.Model):
             _logger.info(f'Limpiando archivos antiguos en el directorio de descargas...')
             for nombre_archivo in os.listdir(download_dir):
                 ruta_archivo = os.path.join(download_dir, nombre_archivo)
-                if ruta_archivo == archivo_actual:
+                ruta_bak = ruta_archivo + "_bak"
+                if ruta_archivo == archivo_actual or \
+                   ruta_bak == archivo_actual:
                     continue
                 # Solo eliminar archivos que coincidan con el patrón de descargas de syscom
-                if nombre_archivo.startswith('syscom_products_') and nombre_archivo.endswith('.csv'):
+                if nombre_archivo.startswith('syscom_products_') and nombre_archivo.endswith('.csv') or \
+                   nombre_archivo.startswith('syscom_products_') and nombre_archivo.endswith('.csv_bak'):
                     try:
                         os.remove(ruta_archivo)
                         _logger.info(f'Removido archivo de descarga antiguo: {ruta_archivo}')
@@ -444,204 +448,309 @@ class SyscomConfig(models.Model):
         _logger.info(f"Categorías creadas o existentes: {categorias_creadas}")
         return categorias_creadas
 
-    def _procesar_csv(self, filepath):
+
+    def _procesar_csv(self, ruta_archivo):
         """Procesar el archivo CSV e importar productos"""
         self.ensure_one()
-        # tasa leida del CSV (si existe). Se tomará la primera aparición.
-        tipo_cambio_csv = None
-        # Parsear lista de categorías
         categorias_filtro = []
         if self.categorias_importar:
             categorias_filtro = [
                 cat.strip().strip('"').strip("'")
                 for cat in self.categorias_importar.split(',')
             ]
+        # 1. Buscar o Crear el Proveedor (Partner)
+        datos_proveedor = self.env['res.partner'].search([
+            ('name', 'ilike', _proveedor_nombre),
+            ('supplier_rank', '>', 0)
+        ], limit=1)
 
-        productos_procesados = 0
-        productos_actualizados = 0
-        productos_creados = 0
+        if not datos_proveedor:
+            # Opcional: Crear el proveedor si no existe
+            datos_proveedor = self.env['res.partner'].create({
+                'name': _proveedor_nombre,
+                'supplier_rank': 1
+            })
+            self.registrar_log(descripcion=f"Proveedor '{_proveedor_nombre}' creado con ID {datos_proveedor.id} para importación Syscom.", tipo_operacion='Creación de Proveedor')
+        else:
+            self.registrar_log(descripcion=f"Proveedor '{_proveedor_nombre}' encontrado con ID {datos_proveedor.id} para importación Syscom.", tipo_operacion='Proveedor Existente')
 
-        # Listas para batch operations
-        productos_actualizar = {}  # {product_id: values}
-        productos_crear_vals = []
-        codigos_procesar = []
-
-        _logger.info(f'Iniciar procesado de CSV desde archivo: {filepath}')
+        _logger.info(f'Iniciar procesado de CSV desde archivo: {ruta_archivo}')
         try:
-            # Primera pasada: recolectar datos del CSV
-            rows_data = []
-            with open(filepath, 'r', encoding='utf-8-sig') as csvfile:
-                csv_reader = csv.DictReader(csvfile)
-
-                for csv_row in csv_reader:
-                    # Filtrar por categoría si está configurado
-                    if categorias_filtro:
-                        menu_nvl1 = csv_row.get('Menu Nvl 1', '').strip()
-                        if menu_nvl1 not in categorias_filtro:
-                            continue
-
-                    # Extraer datos del CSV
-                    default_code = csv_row.get('Modelo', '').strip()
-                    name = csv_row.get('Título', '').strip()
-                    su_precio = csv_row.get('Su Precio', '0').strip()
-                    tipo_cambio_str = csv_row.get('Tipo de Cambio', '').strip()
-
-                    # Si encontramos tipo de cambio en alguna fila, guardarlo (primera aparición)
-                    if tipo_cambio_str and not tipo_cambio_csv:
-                        try:
-                            tipo_cambio_csv = round(float(tipo_cambio_str.replace(',', '')), 2)
-                            _logger.info(f"Tipo de Cambio detectado en CSV: {tipo_cambio_csv}")
-                        except Exception:
-                            _logger.warning(f"No se pudo parsear 'Tipo de Cambio' desde el CSV: {tipo_cambio_str}")
-
-                    menu_nvl1 = csv_row.get('Menu Nvl 1', '').strip()
-                    menu_nvl2 = csv_row.get('Menu Nvl 2', '').strip()
-                    menu_nvl3 = csv_row.get('Menu Nvl 3', '').strip()
-                    clave_producto = csv_row.get('Código Fiscal', '').strip()
-                    link_syscom = csv_row.get('Link SYSCOM', '').strip()
-
-                    if not default_code or not name:
-                        continue
-
-                    # Calcular precios
-                    try:
-                        price_raw = float(su_precio.replace(',', ''))
-                        if self.usd_a_mxn:
-                            tasa = tipo_cambio_csv if tipo_cambio_csv else (getattr(self, 'tasa_cambio', 1.0) or 1.0)
-                            standard_price = round(price_raw * tasa, 2)
-                        else:
-                            standard_price = round(price_raw, 2)
-                        list_price = round(standard_price * (1 + (self.ganancia_porcentaje / 100)), 2)
-                    except ValueError:
-                        _logger.warning(f'Precio inválido para producto {default_code}')
-                        continue
-
-                    # Construir categoría
-                    list_categoria_path = [menu_nvl1, menu_nvl2, menu_nvl3]
-
-                    rows_data.append({
-                        'default_code': default_code,
-                        'name': name,
-                        'standard_price': standard_price,
-                        'list_price': list_price,
-                        'categoria_path': list_categoria_path,
-                        'objetoimp': _id_objetoimp,
-                        'cat_unidad_medida': _id_cat_unidad_medida,
-                        'clave_producto': clave_producto,
-                    })
-                    codigos_procesar.append(default_code)
-
-            _logger.info(f'CSV parsing completed. Total rows collected for processing: {len(rows_data)}')
-            # Búsqueda batch de productos existentes
-            productos_existentes = {}
-            if codigos_procesar:
-                existing_products = self.env['product.template'].search([
-                    ('default_code', 'in', codigos_procesar)
-                ])
-                productos_existentes = {p.default_code: p for p in existing_products}
-
-            # Procesar los datos recolectados
-            for row_data in rows_data:
-                default_code = row_data['default_code']
-                categoria = self._get_or_create_category_from_parts(row_data['categoria_path'])
-
-                if default_code in productos_existentes:
-                    # Producto existe - preparar para actualización
-                    product = productos_existentes[default_code]
-                    productos_actualizar[product.id] = {
-                        'standard_price': row_data['standard_price'],
-                        'list_price': row_data['list_price'],
-                    }
-                else:
-                    # Producto nuevo - preparar para creación
-                    productos_crear_vals.append({
-                        'name': row_data['name'],
-                        'default_code': default_code,
-                        'description_sale': row_data['name'],
-                        'standard_price': row_data['standard_price'],
-                        'list_price': row_data['list_price'],
-                        'categ_id': categoria.id if categoria else False,
-                        'type': 'consu',
-                        'purchase_ok': True,
-                        'sale_ok': True,
-                        'cat_unidad_medida': row_data['cat_unidad_medida'],
-                        'clave_producto': row_data['clave_producto'],
-                        'objetoimp': row_data['objetoimp'],
-                        'syscom_url': link_syscom,
-                    })
-
-                productos_procesados += 1
-
-            # Ejecutar operaciones batch
-            # Actualizar productos existentes en batch
-            if productos_actualizar:
-                _logger.info(f'Actualizando {len(productos_actualizar)} productos en batch...')
-                for product_id, values in productos_actualizar.items():
-                    self.env['product.template'].browse(product_id).write(values)
-                    # grabar en bitácora externa de precios el producto actualizado y su nuevo precio
-                    if (_usar_bitacora_precios is False):
-                        continue
-                    try:
-                        product = self.env['product.template'].browse(product_id)
-                        registrar_bitacora(f"Producto actualizado: {product.default_code} - Nuevo precio: {values.get('list_price', 'N/A')}")
-                    except Exception as e:
-                        _logger.error(f'Error al registrar bitácora de producto actualizado: {e}')
-                productos_actualizados = len(productos_actualizar)
-
-            # Crear nuevos productos en batches (grupos de 5000)
-            created_records = self.env['product.template']
-            if productos_crear_vals:
-                batch_size = _registros_por_batch
-                _logger.info(f'Creando {len(productos_crear_vals)} productos en batches de {batch_size}...')
-                for i in range(0, len(productos_crear_vals), batch_size):
-                    chunk = productos_crear_vals[i:i+batch_size]
-                    try:
-                        created_chunk = self.env['product.template'].create(chunk)
-                        created_records |= created_chunk
-
-                        # Registrar en bitácora externa de precios los productos creados
-                        if (_usar_bitacora_precios is False):
-                            continue
-                        for product in created_chunk:
-                            registrar_bitacora(f"Producto creado: {product.default_code} - Precio: {product.list_price}")
-                    except Exception as e:
-                        _logger.error(f'Error creando batch de productos (offset {i}): {e}', exc_info=True)
-
-                productos_creados = len(created_records)
-
-                # Asignar impuestos en batch si se encuentra el impuesto IVA 16%
-                try:
-                    tax_iva_16 = self.env['account.tax'].search([('amount', '=', 16), ('type_tax_use', '=', 'sale')], limit=1)
-                    if tax_iva_16 and created_records:
-                        created_records.write({'taxes_id': [(6, 0, [tax_iva_16.id])]})
-                        _logger.info(f'Impuesto IVA 16% asignado a {len(created_records)} productos creados')
-                except Exception as e:
-                    _logger.exception('No se pudo asignar impuestos en batch a los productos creados: %s', e)
-
-            _logger.info(f'Importación completada: {productos_procesados} procesados, '
-                         f'{productos_creados} creados, {productos_actualizados} actualizados')
-
-            # Registrar en bitácora el procesamiento y la tasa de cambio utilizada (si aplica)
-            try:
-                file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
-                categorias_importadas = self.categorias_importar or '----'
-                tasa_log = tipo_cambio_csv if tipo_cambio_csv else (getattr(self, 'tasa_cambio', None) or 0.0)
-                self.env['syscom.log'].create({
-                    'fecha_descarga': fields.Datetime.now(),
-                    'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
-                    'ruta_archivo': filepath,
-                    'url_origen': self.syscom_url,
-                    'categorias_importadas': categorias_importadas,
-                    'tipo_accion': 'Procesar CSV',
-                    'tasa_cambio': tasa_log,
-                })
-                _logger.info(f'Syscom: Tasa de cambio registrada en bitácora: {tasa_log}')
-            except Exception:
-                _logger.exception('No se pudo registrar la tasa de cambio en la bitácora')
-
+            filas_de_datos, tipo_cambio_csv, codigos_procesar = self._leer_csv(ruta_archivo, categorias_filtro)
+            d_productos_actualizar, l_productos_crear_vals, productos_procesados = self._clasificar_productos(filas_de_datos, codigos_procesar)
+            productos_actualizados = self._procesar_batch_actualizacion(d_productos_actualizar)
+            productos_creados = self._procesar_batch_creacion(l_productos_crear_vals)
+            productos_registrados = self._procesar_info_proveedor(l_productos_crear_vals, d_productos_actualizar, datos_proveedor)
+            self._registrar_log_importacion(ruta_archivo, tipo_cambio_csv, productos_procesados, productos_creados, productos_actualizados)
         except Exception as e:
             _logger.error(f'Error procesando CSV: {str(e)}')
             raise UserError(f'Error al procesar el archivo CSV: {str(e)}')
+
+    def _leer_csv(self, ruta_archivo, categorias_filtro):
+        filas_de_datos = []
+        tipo_cambio_csv = None
+        codigos_procesar = []
+        with open(ruta_archivo, 'r', encoding='utf-8-sig') as archivo_csv:
+            lector_csv = csv.DictReader(archivo_csv)
+            for fila_datos_csv in lector_csv:
+                if categorias_filtro:
+                    menu_nvl1 = fila_datos_csv.get('Menu Nvl 1', '').strip()
+                    if menu_nvl1 not in categorias_filtro:
+                        continue
+                default_code = fila_datos_csv.get('Modelo', '').strip()
+                name = fila_datos_csv.get('Título', '').strip()
+                su_precio = fila_datos_csv.get('Su Precio', '0').strip()
+                tipo_cambio_str = fila_datos_csv.get('Tipo de Cambio', '').strip()
+                marca_cache = {}  # Cache para marcas ya procesadas en este ciclo
+                marca = fila_datos_csv.get('Marca', _sin_marca_nombre).strip()
+                marca_id = self._set_or_create_brand(marca, marca_cache)
+                marca_id = marca_id.id if marca_id else False
+                if tipo_cambio_str and not tipo_cambio_csv:
+                    try:
+                        tipo_cambio_csv = round(float(tipo_cambio_str.replace(',', '')), 2)
+                        _logger.info(f"Tipo de Cambio detectado en CSV: {tipo_cambio_csv}")
+                    except Exception:
+                        _logger.warning(f"No se pudo parsear 'Tipo de Cambio' desde el CSV: {tipo_cambio_str}")
+                menu_nvl1 = fila_datos_csv.get('Menu Nvl 1', '').strip()
+                menu_nvl2 = fila_datos_csv.get('Menu Nvl 2', '').strip()
+                menu_nvl3 = fila_datos_csv.get('Menu Nvl 3', '').strip()
+                clave_producto = fila_datos_csv.get('Código Fiscal', '').strip()
+                link_syscom = fila_datos_csv.get('Link SYSCOM', '').strip()
+                if not default_code or not name:
+                    continue
+                precios = self._calcular_precios(su_precio, tipo_cambio_csv)
+                if not precios:
+                    _logger.warning(f'Precio inválido para producto {default_code}')
+                    continue
+                standard_price, list_price = precios
+                list_categoria_path = [menu_nvl1, menu_nvl2, menu_nvl3]
+                filas_de_datos.append({
+                    'default_code': default_code,
+                    'name': name,
+                    'standard_price': standard_price,
+                    'list_price': list_price,
+                    'categoria_path': list_categoria_path,
+                    'objetoimp': _id_objetoimp,
+                    'cat_unidad_medida': _id_cat_unidad_medida,
+                    'clave_producto': clave_producto,
+                    'syscom_url': link_syscom,
+                    'product_brand_id': marca_id,
+                })
+                codigos_procesar.append(default_code)
+        _logger.info(f'CSV parsing completed. Total rows collected for processing: {len(filas_de_datos)}')
+        return filas_de_datos, tipo_cambio_csv, codigos_procesar
+
+    def _calcular_precios(self, su_precio, tipo_cambio_csv):
+        try:
+            price_raw = float(su_precio.replace(',', ''))
+            if self.usd_a_mxn:
+                tasa = tipo_cambio_csv if tipo_cambio_csv else (getattr(self, 'tasa_cambio', 1.0) or 1.0)
+                standard_price = round(price_raw * tasa, 2)
+            else:
+                standard_price = round(price_raw, 2)
+            list_price = round(standard_price * (1 + (self.ganancia_porcentaje / 100)), 2)
+            return standard_price, list_price
+        except Exception:
+            return None
+
+    # Funcion para agregar la marca de los productos importados, usando el modulo de OCA product_brand, si esta instalado. Si no, se puede omitir o implementar de otra forma.
+    def _set_or_create_brand(self, nombre_marca, marca_cache={}):
+        if "product.brand" in self.env.registry:
+            if nombre_marca in marca_cache:
+                return marca_cache[nombre_marca]
+            marca = self.env['product.brand'].search([('name', '=', nombre_marca)], limit=1)
+            if not marca:
+                marca = self.env['product.brand'].create({
+                    'name': nombre_marca,
+                })
+            marca_cache[nombre_marca] = marca
+
+            return marca
+        else:
+            _logger.warning('El módulo product_brand no está instalado, no se asignará marca a los productos importados.')
+            return False
+
+    def _clasificar_productos(self, filas_de_datos, codigos_procesar):
+        d_productos_actualizar = {}
+        l_productos_crear_vals = []
+        productos_procesados = 0
+        productos_existentes = {}
+        if codigos_procesar:
+            existing_products = self.env['product.template'].search([
+                ('default_code', 'in', codigos_procesar)
+            ])
+            productos_existentes = {p.default_code: p for p in existing_products}
+        for fila_con_datos in filas_de_datos:
+            default_code = fila_con_datos['default_code']
+            categoria = self._get_or_create_category_from_parts(fila_con_datos['categoria_path'])
+            if default_code in productos_existentes:
+                product = productos_existentes[default_code]
+                d_productos_actualizar[product.id] = {
+                    'default_code': default_code,
+                    'name': fila_con_datos['name'],
+                    'standard_price': fila_con_datos['standard_price'],
+                    'list_price': fila_con_datos['list_price'],
+                    # Estos deberian de ser campos personalizados en el modelo supplierinfo o en un modelo relacionado, no en product.template directamente, ajustar según corresponda
+                    'syscom_url': fila_con_datos.get('syscom_url'),
+                    'syscom_url_image': fila_con_datos.get('Imagen Principal'),  # Asumiendo que la URL de la imagen es la misma que la del producto, ajustar si es diferente
+                    'product_brand_id': fila_con_datos.get('product_brand_id'),
+                }
+            else:
+                l_productos_crear_vals.append({
+                    'name': fila_con_datos['name'],
+                    'default_code': default_code,
+                    'description_sale': fila_con_datos['name'],
+                    'standard_price': fila_con_datos['standard_price'],
+                    'list_price': fila_con_datos['list_price'],
+                    'categ_id': categoria.id if categoria else False,
+                    'type': 'consu',
+                    'purchase_ok': True,
+                    'sale_ok': True,
+                    'cat_unidad_medida': fila_con_datos['cat_unidad_medida'],
+                    'clave_producto': fila_con_datos['clave_producto'],
+                    'objetoimp': fila_con_datos['objetoimp'],
+                    # Estos deberian de ser campos personalizados en el modelo supplierinfo o en un modelo relacionado, no en product.template directamente, ajustar según corresponda
+                    'syscom_url': fila_con_datos.get('syscom_url'),
+                    'syscom_url_image': fila_con_datos.get('Imagen Principal'),  # Asumiendo que la URL de la imagen es la misma que la del producto, ajustar si es diferente
+                    'product_brand_id': fila_con_datos.get('product_brand_id'),
+                })
+            productos_procesados += 1
+        return d_productos_actualizar, l_productos_crear_vals, productos_procesados
+
+    def _procesar_batch_actualizacion(self, productos_actualizar):
+        productos_actualizados = 0
+        if productos_actualizar:
+            _logger.info(f'Actualizando {len(productos_actualizar)} productos en batch...')
+            # agregar un contador del porcentaje de actualización cada 100 registros procesados o cada 5 segundos, lo que ocurra primero
+            total = len(productos_actualizar)
+            count = 0
+            for product_id, values in productos_actualizar.items():
+                self.env['product.template'].browse(product_id).write(values)
+                count += 1
+                if count % 100 == 0 or count == total:
+                    porcentaje = (count / total * 100) if total > 0 else 0
+                    _logger.info(f'Progreso de actualización: {porcentaje:.2f}% ({count}/{total})')
+                if (_usar_bitacora_precios is False):
+                    continue
+                try:
+                    product = self.env['product.template'].browse(product_id)
+                    registrar_bitacora_precios(f"Producto actualizado: {product.default_code} - Nuevo precio: {values.get('list_price', 'N/A')}")
+                except Exception as e:
+                    _logger.error(f'Error al registrar bitácora de producto actualizado: {e}')
+            productos_actualizados = len(productos_actualizar)
+        return productos_actualizados
+
+    def _procesar_batch_creacion(self, productos_crear_vals):
+        productos_creados = 0
+        created_records = self.env['product.template']
+        if productos_crear_vals:
+            batch_size = _registros_por_batch
+            _logger.info(f'Creando {len(productos_crear_vals)} productos en batches de {batch_size}...')
+            for i in range(0, len(productos_crear_vals), batch_size):
+                chunk = productos_crear_vals[i:i+batch_size]
+                try:
+                    created_chunk = self.env['product.template'].create(chunk)
+                    created_records |= created_chunk
+                    if (_usar_bitacora_precios is False):
+                        continue
+                    for product in created_chunk:
+                        registrar_bitacora_precios(f"Producto creado: {product.default_code} - Precio: {product.list_price}")
+                except Exception as e:
+                    _logger.error(f'Error creando batch de productos (offset {i}): {e}', exc_info=True)
+            productos_creados = len(created_records)
+            try:
+                tax_iva_16 = self.env['account.tax'].search([('amount', '=', 16), ('type_tax_use', '=', 'sale')], limit=1)
+                if tax_iva_16 and created_records:
+                    created_records.write({'taxes_id': [(6, 0, [tax_iva_16.id])]})
+                    _logger.info(f'Impuesto IVA 16% asignado a {len(created_records)} productos creados')
+            except Exception as e:
+                _logger.exception('No se pudo asignar impuestos en batch a los productos creados: %s', e)
+        return productos_creados
+
+    # metodo para registrar una entrada al log recibiendo solo una descripcion y tipo de operacion,
+    # usando datos adicionales como la fecha actual, url de syscom y categorias importadas desde la configuración actual
+    def registrar_log(self, descripcion='Falta descripcion', tipo_operacion='Operacion no especificada'):
+        try:
+            self.env['syscom.log'].create({
+                'fecha_descarga': fields.Datetime.now(),
+                'tamano_descarga': 'NA',
+                'ruta_archivo': '----',
+                'url_origen': self.syscom_url,
+                'categorias_importadas': descripcion,
+                'tipo_accion': tipo_operacion,
+                'tasa_cambio': 0.0,
+            })
+            _logger.info(f'Syscom: Log registrado - {tipo_operacion}: {descripcion}')
+        except Exception as e:
+            _logger.error(f'Error al registrar log: {str(e)}')
+
+    def _procesar_info_proveedor(self, l_productos_creados_vals=[], d_productos_actualizados={}, proveedor_info=None):
+        registros_procesados = 0
+        total_productos = len(l_productos_creados_vals) + len(d_productos_actualizados)
+        for producto_vals in l_productos_creados_vals + list(d_productos_actualizados.values()):
+            try:
+                producto_info = self.env['product.template'].search([('default_code', '=', producto_vals['default_code'])], limit=1)
+                if not producto_info:
+                    _logger.warning(f'No se encontró el producto recién creado para info de proveedor: {producto_vals["default_code"]}')
+                    continue
+
+                # Buscamos si este producto ya tiene a este proveedor asignado
+                info_existente = self.env['product.supplierinfo'].search([
+                    ('product_tmpl_id', '=', producto_info.id),
+                    ('partner_id', '=', proveedor_info.id)
+                ], limit=1)
+
+                if info_existente and info_existente.price == round(float(producto_vals['standard_price']), 2):
+                    registros_procesados += 1
+                    continue  # Si el precio es el mismo, no hacemos nada
+
+                datos_tarifa = {
+                    'partner_id': proveedor_info.id,
+                    'product_tmpl_id': producto_info.id,
+                    'price': round(float(producto_vals['standard_price']),2),
+                    'product_code': producto_vals['default_code'], # El código que usa el proveedor
+                    'product_name': producto_vals['name'],          # Nombre que usa el proveedor
+                    # 'currency_id': self.env.ref('base.USD').id if row['moneda'] == 'USD' else self.env.ref('base.MXN').id
+                }
+
+                if info_existente:
+                    # Si ya existe, actualizamos el precio y código
+                    info_existente.write(datos_tarifa)
+                    #_logger.info(f"Actualizada tarifa de {proveedor_info.name} para {producto_vals['default_code']}")
+                else:
+                    # Si es nuevo, lo creamos
+                    self.env['product.supplierinfo'].create(datos_tarifa)
+                    #_logger.info(f"Creada nueva tarifa de {proveedor_info.name} para {producto_vals['default_code']}")
+                registros_procesados += 1
+                # llevar un contador de registros procesados y mostrarlo cada 100 registros o cada 5 segundos, lo que ocurra primero
+                if registros_procesados % 100 == 0 or registros_procesados == total_productos:
+                    porcentaje = (registros_procesados / total_productos * 100) if total_productos > 0 else 0
+                    _logger.info(f'Progreso de info proveedor Porcentaje: {porcentaje:.2f}%')
+            except Exception as e:
+                _logger.error(f'Error al crear info de proveedor para producto {producto_vals["default_code"]}: {e}')
+        _logger.info(f'Información de proveedor procesada para {registros_procesados} productos.')
+        self.registrar_log(descripcion=f'Información de proveedor procesada para {registros_procesados} productos.', tipo_operacion='Info Proveedor')
+        return registros_procesados
+
+    def _registrar_log_importacion(self, filepath, tipo_cambio_csv, productos_procesados, productos_creados, productos_actualizados):
+        _logger.info(f'Importación completada: {productos_procesados} procesados, '
+                     f'{productos_creados} creados, {productos_actualizados} actualizados')
+        try:
+            file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+            categorias_importadas = self.categorias_importar or '----'
+            tasa_log = tipo_cambio_csv if tipo_cambio_csv else (getattr(self, 'tasa_cambio', None) or 0.0)
+            self.env['syscom.log'].create({
+                'fecha_descarga': fields.Datetime.now(),
+                'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
+                'ruta_archivo': filepath,
+                'url_origen': self.syscom_url,
+                'categorias_importadas': categorias_importadas,
+                'tipo_accion': 'Procesar CSV',
+                'tasa_cambio': tasa_log,
+            })
+            _logger.info(f'Syscom: Tasa de cambio registrada en bitácora: {tasa_log}')
+        except Exception:
+            _logger.exception('No se pudo registrar la tasa de cambio en la bitácora')
 
     # metodo para modificar los modelos de impuestos en product.template, para asignar el impuesto de iva 16% a los productos importados
     # y el impuesto del 16% de iva en ventas
