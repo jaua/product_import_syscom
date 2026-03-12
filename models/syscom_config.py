@@ -687,42 +687,47 @@ class SyscomConfig(models.Model):
     def _procesar_info_proveedor(self, l_productos_creados_vals=[], d_productos_actualizados={}, proveedor_info=None):
         registros_procesados = 0
         total_productos = len(l_productos_creados_vals) + len(d_productos_actualizados)
-        for producto_vals in l_productos_creados_vals + list(d_productos_actualizados.values()):
+        productos_vals = l_productos_creados_vals + list(d_productos_actualizados.values())
+        # Buscar todos los productos por default_code en una sola consulta
+        default_codes = [p['default_code'] for p in productos_vals]
+        productos = self.env['product.template'].search([('default_code', 'in', default_codes)])
+        productos_dict = {p.default_code: p for p in productos}
+
+        # Buscar supplierinfo existentes para este proveedor y estos productos
+        supplierinfos = self.env['product.supplierinfo'].search([
+            ('product_tmpl_id', 'in', productos.ids),
+            ('partner_id', '=', proveedor_info.id)
+        ])
+        supplierinfo_dict = {(s.product_tmpl_id.id, s.partner_id.id): s for s in supplierinfos}
+
+        for producto_vals in productos_vals:
             try:
-                producto_info = self.env['product.template'].search([('default_code', '=', producto_vals['default_code'])], limit=1)
+                producto_info = productos_dict.get(producto_vals['default_code'])
                 if not producto_info:
                     _logger.warning(f'No se encontró el producto recién creado para info de proveedor: {producto_vals["default_code"]}')
                     continue
 
-                # Buscamos si este producto ya tiene a este proveedor asignado
-                info_existente = self.env['product.supplierinfo'].search([
-                    ('product_tmpl_id', '=', producto_info.id),
-                    ('partner_id', '=', proveedor_info.id)
-                ], limit=1)
+                key = (producto_info.id, proveedor_info.id)
+                info_existente = supplierinfo_dict.get(key)
 
-                if info_existente and info_existente.price == round(float(producto_vals['standard_price']), 2):
+                precio = round(float(producto_vals['standard_price']), 2)
+                if info_existente and info_existente.price == precio:
                     registros_procesados += 1
                     continue  # Si el precio es el mismo, no hacemos nada
 
                 datos_tarifa = {
                     'partner_id': proveedor_info.id,
                     'product_tmpl_id': producto_info.id,
-                    'price': round(float(producto_vals['standard_price']),2),
-                    'product_code': producto_vals['default_code'], # El código que usa el proveedor
-                    'product_name': producto_vals['name'],          # Nombre que usa el proveedor
-                    # 'currency_id': self.env.ref('base.USD').id if row['moneda'] == 'USD' else self.env.ref('base.MXN').id
+                    'price': precio,
+                    'product_code': producto_vals['default_code'],
+                    'product_name': producto_vals['name'],
                 }
 
                 if info_existente:
-                    # Si ya existe, actualizamos el precio y código
                     info_existente.write(datos_tarifa)
-                    #_logger.info(f"Actualizada tarifa de {proveedor_info.name} para {producto_vals['default_code']}")
                 else:
-                    # Si es nuevo, lo creamos
                     self.env['product.supplierinfo'].create(datos_tarifa)
-                    #_logger.info(f"Creada nueva tarifa de {proveedor_info.name} para {producto_vals['default_code']}")
                 registros_procesados += 1
-                # llevar un contador de registros procesados y mostrarlo cada 100 registros o cada 5 segundos, lo que ocurra primero
                 if registros_procesados % 100 == 0 or registros_procesados == total_productos:
                     porcentaje = (registros_procesados / total_productos * 100) if total_productos > 0 else 0
                     _logger.info(f'Progreso de info proveedor Porcentaje: {porcentaje:.2f}%')
