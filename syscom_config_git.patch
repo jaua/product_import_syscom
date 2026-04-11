@@ -1,0 +1,198 @@
+diff --git a/models/syscom_config.py b/models/syscom_config.py
+index 408b902..ad1044c 100644
+--- a/models/syscom_config.py
++++ b/models/syscom_config.py
+@@ -20,17 +20,18 @@ _archivo_csv_prefijo = "syscom_products_"
+ _archivo_csv_extension = ".csv"
+ _archivo_bitacora_precios = f"{_ruta_descarga}/syscom_precios_bitacora.txt"
+ _usar_bitacora_precios = True  # Variable para controlar el uso de la bitácora de precios
+-_elimiar_archivo_previo = True
++_eliminar_archivo_previo = True
+ _tiempo_espera_descarga = 300  # segundos
+ _periodo_actualizaciones = 5  # tiempo en segundos para mostrar progreso de descarga
+ _id_objetoimp = "02"  # variable global para asignar el id del objeto de impuesto a los productos importados
+ _id_cat_unidad_medida = 1  # variable global para asignar la categoría de unidad de medida a los productos importados
+ _categoria_separador = ' \ '  # Separador para construir la ruta de categorías anidadas
+-_registros_por_batch = 5000  # cantidad de registros a procesar por batch en la creación de productos_
++_registros_por_batch = 10000  # cantidad de registros a procesar por batch en la creación de productos_
+ _mxn_valor = 1.0  # Valor de respaldo para convertir USD a MXN si no se encuentra en el CSV o en la configuración
+ _digitos_redondeo = 2  # Cantidad de dígitos para redondear la tasa de cambio al actualizarla desde el CSV o al calcular precios
+ _sin_marca_nombre = "S/M"  # Nombre de marca por defecto para productos sin marca especificada
+ 
++
+ # Funcion de bitacora a archivo de texto (opcional, se puede usar solo el modelo syscom.log para registrar eventos)
+ def registrar_bitacora_precios(mensaje):
+     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+@@ -94,89 +95,67 @@ class SyscomConfig(models.Model):
+         return config
+ 
+     def ejecutar_importacion(self):
++        """
++        Ejecuta el proceso de importación manual.
++        Separa la lógica en sub-métodos para mayor claridad.
++        """
+         """Ejecutar el proceso de importación manualmente"""
+         self.ensure_one()
+         try:
+-            _logger.info('Iniciando importación manual desde Syscom')
+-            periodo_segundos = self.get_config().periodo_segundos
+-            diferencia = 3600  # Valor inicial alto
+-            path_archivo_previo = ""
+-            reutilizar_archivo = False
+-            no_usado = None
+-
+-            _logger.info("Syscom: Verificando última descarga en bitácora...")
+-
+-            # 2. Verificar última descarga en bitácora
+-            last_log = self.env['syscom.log'].search(
+-                [('tipo_accion', '=', 'Descarga CSV')],
+-                limit=1,
+-                order='fecha_descarga desc')
+-            now = datetime.now()
+-
+-            path_archivo_previo = last_log.ruta_archivo if last_log else ""
+-
+-            if last_log and last_log.fecha_descarga and last_log.ruta_archivo:
+-                # Calcular diferencia de tiempo
+-                diferencia = (now - last_log.fecha_descarga).total_seconds()
+-            else:
+-                _logger.info("Syscom: No se encontraron registros previos de descarga en la bitácora.")
+-                diferencia = periodo_segundos + 1  # Forzar descarga si no hay registros
+-
+-            _logger.info("Syscom: Última descarga fue hace %ss", int(diferencia))
++            self._log_inicio_importacion()
++            archivo_path = self._gestionar_descarga_csv()
++            archivo_path, _ = self.csv_limpiar(archivo_path, mantener_respaldo=True)
++            self._procesar_csv(archivo_path)
++            self._limpiar_archivos_antiguos(archivo_path)
++            return self._notificacion_exito()
++        except Exception as e:
++            self._log_error_importacion(e)
++            raise UserError(f'Error al importar productos: {str(e)}')
+ 
+-            if diferencia < periodo_segundos:
+-                if os.path.exists(last_log.ruta_archivo):
+-                    _logger.info("Syscom: El tiempo transcurrido (%ss) es menor al periodo (%ss). Reutilizando archivo anterior.", int(diferencia), periodo_segundos)
+-                    reutilizar_archivo = True
+-                    path_archivo_previo = last_log.ruta_archivo
+-                    log_record = last_log # Usaremos el mismo registro para actualizar conteo si es necesario o uno nuevo
+-                else:
+-                    _logger.warning("Syscom: Ruta del archivo anterior no encontrada: %s. Se procederá a descargar un nuevo archivo.", last_log.ruta_archivo)
+-                    reutilizar_archivo = False
+-            else:
+-                _logger.info("Syscom: El tiempo transcurrido (%ss) es mayor al periodo (%ss). Se procederá a descargar un nuevo archivo.", int(diferencia), periodo_segundos)
+-                reutilizar_archivo = False
+-
+-            # 3. Descarga o Reutilización
+-            if reutilizar_archivo:
+-                # Si reutilizamos, simplemente procesamos
+-                _logger.info("Syscom: Reutilizando archivo descargado previamente: %s", path_archivo_previo)
+-                archivo_path = path_archivo_previo
+-                _elimiar_archivo_previo = False  # No eliminaremos el archivo previo si lo estamos reutilizando
+-            else:
+-                # Proceder con la descarga normal
+-                _logger.info("Syscom: Iniciando nueva descarga del archivo CSV...")
+-                archivo_path = self._descargar_csv()
+-                _elimiar_archivo_previo = True  # Si descargamos un nuevo archivo, sí eliminaremos el previo después de procesar
+-                _logger.info("Syscom: Archivo descargado en: %s", archivo_path)
++    def _log_inicio_importacion(self):
++        _logger.info('Iniciando importación manual desde Syscom')
+ 
++    def _gestionar_descarga_csv(self):
++        """
++        Gestiona la descarga o reutilización del archivo CSV.
++        """
++        periodo_segundos = self.get_config().periodo_segundos
++        last_log = self.env['syscom.log'].search(
++            [('tipo_accion', '=', 'Descarga CSV')],
++            limit=1,
++            order='fecha_descarga desc')
++        now = datetime.now()
++        path_archivo_previo = last_log.ruta_archivo if last_log else ""
++        diferencia = (now - last_log.fecha_descarga).total_seconds() if last_log and last_log.fecha_descarga and last_log.ruta_archivo else periodo_segundos + 1
++        _logger.info("Syscom: Última descarga fue hace %ss", int(diferencia))
++        reutilizar_archivo = diferencia < periodo_segundos and os.path.exists(path_archivo_previo)
++        if reutilizar_archivo:
++            _logger.info("Syscom: Reutilizando archivo descargado previamente: %s", path_archivo_previo)
++            return path_archivo_previo
++        else:
++            _logger.info("Syscom: Iniciando nueva descarga del archivo CSV...")
++            archivo_path = self._descargar_csv()
++            _logger.info("Syscom: Archivo descargado en: %s", archivo_path)
+             if archivo_path == "NoCSV":
+                 _logger.error("Syscom: El archivo descargado no es un CSV válido. Verifique la URL y el acceso al recurso.")
+-                _elimiar_archivo_previo = False  # No eliminaremos el archivo previo si el nuevo no es válido
+                 raise ValueError("No se descargo el csv correctamente.")
++            return archivo_path
++
++    def _notificacion_exito(self):
++        return {
++            'type': 'ir.actions.client',
++            'tag': 'display_notification',
++            'params': {
++                'title': 'Importación Exitosa',
++                'message': 'Los productos han sido importados correctamente',
++                'type': 'success',
++                'sticky': False,
++            }
++        }
+ 
+-            archivo_path, no_usado = self.csv_limpiar(archivo_path, mantener_respaldo=True)
+-
+-            _logger.info("Syscom: Procesando el archivo CSV: %s", archivo_path)
+-
+-            self._procesar_csv(archivo_path)
+-
+-            # Si procesamos sin errores, limpiar archivos antiguos descargados
+-            self._limpiar_archivos_antiguos(archivo_path)
++    def _log_error_importacion(self, error):
++        _logger.error(f'Error en importación: {str(error)}')
+ 
+-            return {
+-                'type': 'ir.actions.client',
+-                'tag': 'display_notification',
+-                'params': {
+-                    'title': 'Importación Exitosa',
+-                    'message': 'Los productos han sido importados correctamente',
+-                    'type': 'success',
+-                    'sticky': False,
+-                    }
+-                }
+-        except Exception as e:
+-            _logger.error(f'Error en importación: {str(e)}')
+-            raise UserError(f'Error al importar productos: {str(e)}')
+ 
+     def _descargar_csv(self):
+         """Descargar el archivo CSV desde la URL configurada"""
+@@ -554,21 +533,23 @@ class SyscomConfig(models.Model):
+             return None
+ 
+     # Funcion para agregar la marca de los productos importados, usando el modulo de OCA product_brand, si esta instalado. Si no, se puede omitir o implementar de otra forma.
+-    def _set_or_create_brand(self, nombre_marca, marca_cache={}):
++    def _set_or_create_brand(self, nombre_marca, marca_cache=None):
++        """
++        Busca o crea una marca de producto.
++        Evita side-effects en helpers.
++        """
++        if marca_cache is None:
++            marca_cache = {}
+         if "product.brand" in self.env.registry:
+             if nombre_marca in marca_cache:
+                 return marca_cache[nombre_marca]
+             marca = self.env['product.brand'].search([('name', '=', nombre_marca)], limit=1)
+             if not marca:
+-                marca = self.env['product.brand'].create({
+-                    'name': nombre_marca,
+-                })
++                marca = self.env['product.brand'].create({'name': nombre_marca})
+             marca_cache[nombre_marca] = marca
+-
+             return marca
+-        else:
+-            _logger.warning('El módulo product_brand no está instalado, no se asignará marca a los productos importados.')
+-            return False
++        _logger.warning('El módulo product_brand no está instalado, no se asignará marca a los productos importados.')
++        return False
+ 
+     def _clasificar_productos(self, filas_de_datos, codigos_procesar):
+         d_productos_actualizar = {}

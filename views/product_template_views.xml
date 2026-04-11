@@ -7,7 +7,7 @@
         <field name="arch" type="xml">
             <!-- Agregar el campo después de 'categ_id' en la sección de Información General -->
             <xpath expr="//field[@name='barcode']" position="after">
-                <field name="syscom_url" widget="url" placeholder="https://ejemplo.com/producto"/>
+                <field name="product_url_ref" widget="url" placeholder="https://ejemplo.com/producto"/>
             </xpath>
         </field>
     </record>
@@ -19,7 +19,7 @@
         <field name="inherit_id" ref="product.product_template_tree_view"/>
         <field name="arch" type="xml">
             <xpath expr="//field[@name='barcode']" position="after">
-                <field name="syscom_url" optional="hide"/>
+                <field name="product_url_ref" optional="hide"/>
             </xpath>
         </field>
     </record>

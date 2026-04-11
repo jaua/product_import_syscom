@@ -30,6 +30,12 @@ def decodifica_linea(linea_de_texto: bytes) -> str:
 
 
 def normaliza_csv(ruta_de_entrada: str, ruta_de_salida: str) -> None:
+    """Lee un archivo CSV línea por línea, detectando y corrigiendo
+    problemas de codificación.
+    Parámetros:
+        ruta_de_entrada (str): Ruta del archivo CSV original a normalizar.
+        ruta_de_salida (str): Ruta donde se guardará el archivo CSV normalizado.
+    """
     archivo_entrada = Path(ruta_de_entrada)
     archivo_salida = Path(ruta_de_salida)
 
@@ -46,13 +52,17 @@ def normaliza_csv(ruta_de_entrada: str, ruta_de_salida: str) -> None:
             except UnicodeDecodeError:
                 line = decodifica_linea(raw_line)
                 if "\\ufffd" in line or "\ufffd" in line:
-                    _logger.warning(f"  [WARN] Línea {i}: caracteres irrecuperables → sustituidos con U+FFFD")
+                    _logger.warning(f"[WARN] Línea {i}: caracteres "
+                                    f"irrecuperables → sustituidos con U+FFFD")
                     lineas_reemplazadas += 1
                 else:
                     lineas_corregidas += 1
 
             file_out.write(line)
 
-    _logger.info(f"\nArchivo normalizado: {ruta_de_salida}")
-    _logger.info(f"Líneas re-codificadas desde Latin-1 : {lineas_corregidas}")
-    _logger.info(f"Líneas con sustitución U+FFFD       : {lineas_reemplazadas}")
+    from .syscom_parametros import SyscomParametros as Parametros
+    var = Parametros()
+    if var._logger_info:
+        _logger.info(f"\nArchivo normalizado: {ruta_de_salida}")
+        _logger.info(f"Líneas re-codificadas desde Latin-1 : {lineas_corregidas}")
+        _logger.info(f"Líneas con sustitución U+FFFD       : {lineas_reemplazadas}")

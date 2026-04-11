@@ -48,5 +48,8 @@ class SyscomLog(models.Model):
     def create(self, vals):
         """Override create to log creation of SyscomLog entries."""
         record = super(SyscomLog, self).create(vals)
-        _logger.info(f"SyscomLog llamada a created: {record.id} con fecha {record.fecha_descarga}")
+        from .syscom_parametros import SyscomParametros as Parametros
+        var = Parametros()
+        if var._logger_info:
+            _logger.info(f"SyscomLog llamada a created: {record.id} con fecha {record.fecha_descarga}")
         return record
