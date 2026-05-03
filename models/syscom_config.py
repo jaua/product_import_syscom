@@ -31,7 +31,7 @@ def registrar_bitacora_precios(mensaje):
 class SyscomConfig(models.Model):
     _name = 'syscom.config'
     _description = 'Configuración de Syscom'
-    _rec_name = 'syscom_url'
+    _rec_name = 'syscom_url_csv'
 
     syscom_url_csv = fields.Char(
         string='Syscom URL CSV',
@@ -89,7 +89,6 @@ class SyscomConfig(models.Model):
             diferencia = 3600  # Valor inicial alto
             ruta_archivo_previo = ""
             reutilizar_archivo = False
-            no_usado = None
 
             # 2. Verificar última descarga en bitácora
             last_log = self.env['syscom.log'].search(
@@ -497,7 +496,7 @@ class SyscomConfig(models.Model):
                                tipo_operacion='Proveedor Existente')
 
         try:
-            datos_product_template, datos_syscom_proveedor, tipo_cambio_csv, codigos_procesar = self._leer_csv(ruta_archivo, categorias_filtro)
+            datos_product_template, datos_syscom_proveedor, tipo_cambio_csv, codigos_procesar = self._leer_csv(ruta_archivo, categorias_filtro, datos_proveedor.id)
             d_productos_actualizar, l_productos_crear_vals, productos_procesados = self._clasificar_productos(datos_product_template, codigos_procesar)
             d_prod_syscom_actualizar, l_prod_syscom_crear_vals, prod_syscom_procesados = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesar)
             productos_actualizados = self._procesar_batch_actualizacion(d_productos_actualizar)
@@ -510,7 +509,7 @@ class SyscomConfig(models.Model):
             _logger.error(f'Error procesando CSV: {str(e)}')
             raise UserError(f'Error al procesar el archivo CSV: {str(e)}')
 
-    def _leer_csv(self, ruta_archivo, categorias_filtro) -> tuple:
+    def _leer_csv(self, ruta_archivo, categorias_filtro, syscom_provider_id) -> tuple:
         """Lee el archivo CSV y extrae los datos necesarios para la importación.
         Returns:
             tuple: Una tupla con las filas de datos, el tipo de cambio y los códigos a procesar.
@@ -519,9 +518,6 @@ class SyscomConfig(models.Model):
         datos_syscom_proveedor = []
         tipo_cambio_csv = None
         codigos_procesar = []
-        syscom_provider_id = self.env["res.partner"].search(
-            [("name", "ilike", var._proveedor_nombre)],
-            limit=1).id
         marca_cache = {}  # Cache para marcas ya procesadas
         with open(ruta_archivo, 'r', encoding='utf-8-sig') as archivo_csv:
             lector_csv = csv.DictReader(archivo_csv)
@@ -605,7 +601,7 @@ class SyscomConfig(models.Model):
 
                 codigos_procesar.append(default_code)
         if var._logger_info:
-            _logger.info(f'CSV parsing completed. Total rows collected for processing: {len(datos_product_template)}')
+            _logger.info(f'CSV procesado completamente. Total filas procesadas: {len(datos_product_template)}')
         return datos_product_template, datos_syscom_proveedor, tipo_cambio_csv, codigos_procesar
 
     def _calcular_precios(self, su_precio, tipo_cambio_csv) -> tuple:
@@ -633,7 +629,7 @@ class SyscomConfig(models.Model):
             return None
 
     # Funcion para agregar la marca de los productos importados, usando el modulo de OCA product_brand, si esta instalado. Si no, se puede omitir o implementar de otra forma.
-    def _set_or_create_brand(self, nombre_marca, marca_cache={}) -> int:
+    def _set_or_create_brand(self, nombre_marca, marca_cache=None) -> int:
         """Busca o crea una marca en el modelo product.brand.
           y devuelve su ID.
           Args:
@@ -641,6 +637,8 @@ class SyscomConfig(models.Model):
             marca_cache (dict): Un diccionario para almacenar las marcas ya creadas.
           Returns:
             int: El ID de la marca encontrada o creada."""
+        if marca_cache is None:
+            marca_cache = {}
         marca_id = None
         if "product.brand" in self.env.registry:
             if nombre_marca in marca_cache:
@@ -704,9 +702,7 @@ class SyscomConfig(models.Model):
                     #  supplierinfo o en un modelo relacionado, no en
                     # product.template directamente, ajustar según corresponda
                     'product_url_ref': linea_datos.get('syscom_url'),
-                    # Asumiendo que la URL de la imagen es la misma que la del
-                    # producto, ajustar si es diferente
-                    'product_url_image': linea_datos.get('Imagen Principal'),
+                    'product_url_image': linea_datos.get('syscom_url_imagen'),
                     'product_brand_id': linea_datos.get('product_brand_id'),
                 }
             else:
@@ -723,13 +719,8 @@ class SyscomConfig(models.Model):
                     'cat_unidad_medida': linea_datos['cat_unidad_medida'],
                     'clave_producto': linea_datos['clave_producto'],
                     'objetoimp': linea_datos['objetoimp'],
-                    # Estos deberian de ser campos personalizados en el modelo
-                    # supplierinfo o en un modelo relacionado, no en
-                    # product.template directamente, ajustar según corresponda
                     'product_url_ref': linea_datos.get('syscom_url'),
-                    # Asumiendo que la URL de la imagen es la misma que la del
-                    # producto, ajustar si es diferente
-                    'product_url_image': linea_datos.get('Imagen Principal'),
+                    'product_url_image': linea_datos.get('syscom_url_imagen'),
                     'product_brand_id': linea_datos.get('product_brand_id'),
                 })
             productos_procesados += 1
@@ -755,51 +746,53 @@ class SyscomConfig(models.Model):
         productos_procesados = 0
         productos_existentes = {}
 
-        if datos_syscom_proveedor:
-            productos_provider = self.env['product.provider.syscom'].search([
-                ('default_code', 'in', codigos_procesar)
-            ])
-            if var._logger_info:
-                _logger.info(f'Encontrados {len(productos_provider)} productos existentes en el proveedor syscom.')
-            productos_existentes = {p.default_code: p for p in productos_provider}
-            productos_template = self.env['product.template'].search_read([
-                ('default_code', 'in', codigos_procesar)
-                ], ['default_code', 'id']
-            )
-            producto_id_map = {p['default_code']: p['id'] for p in productos_template}
-        # Preparar los datos para actualización o creación
-        for ldatos in datos_syscom_proveedor:
-            default_code = ldatos['default_code']
-            if default_code in productos_existentes:
-                product = productos_existentes[default_code]
-                d_productos_actualizar[product.id] = {
-                    'syscom_inventory': ldatos['syscom_inventory'],
-                    # Estos deberian de ser campos personalizados en el modelo
-                    # supplierinfo o en un modelo relacionado, no en
-                    # product.template directamente, ajustar según corresponda
-                    'syscom_url': ldatos.get('syscom_url'),
-                    # Asumiendo que la URL de la imagen es la misma que
-                    # la del producto, ajustar si es diferente
-                    'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
-                }
-            else:
-                l_productos_crear_vals.append({
-                    'default_code': default_code,
-                    'partner_id': ldatos['partner_id'],
-                    'id_syscom': ldatos['id_syscom'],
-                    # Se asignará después de crear/actualizar
-                    # el producto
-                    'product_tmpl_id': producto_id_map[default_code],
-                    'syscom_inventory': ldatos['syscom_inventory'],
-                    # Estos deberian de ser campos personalizados en el modelo
-                    # supplierinfo o en un modelo relacionado, no en
-                    # product.template directamente, ajustar según corresponda
-                    'syscom_url': ldatos.get('syscom_url'),
-                    # Asumiendo que la URL de la imagen es la misma que la del
-                    # producto, ajustar si es diferente
-                    'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
-                })
-            productos_procesados += 1
+        try:
+            if datos_syscom_proveedor:
+                productos_provider = self.env['product.provider.syscom'].search([
+                    ('default_code', 'in', codigos_procesar)
+                ])
+                if var._logger_info:
+                    _logger.info(f'Encontrados {len(productos_provider)} productos existentes en el proveedor syscom.')
+                productos_existentes = {p.default_code: p for p in productos_provider}
+                productos_template = self.env['product.template'].search_read([
+                    ('default_code', 'in', codigos_procesar)
+                    ], ['default_code', 'id']
+                )
+                producto_id_map = {p['default_code']: p['id'] for p in productos_template}
+            # Preparar los datos para actualización o creación
+            for ldatos in datos_syscom_proveedor:
+                default_code = ldatos['default_code']
+                if default_code in productos_existentes:
+                    product = productos_existentes[default_code]
+                    d_productos_actualizar[product.id] = {
+                        'syscom_inventory': ldatos['syscom_inventory'],
+                        # Estos deberian de ser campos personalizados en el modelo
+                        # supplierinfo o en un modelo relacionado, no en
+                        # product.template directamente, ajustar según corresponda
+                        'syscom_url': ldatos.get('syscom_url'),
+                        # Asumiendo que la URL de la imagen es la misma que
+                        # la del producto, ajustar si es diferente
+                        'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
+                    }
+                else:
+                    tmpl_id = producto_id_map.get(default_code)
+                    if not tmpl_id:
+                        _logger.warning(
+                            'No se encontró product.template para default_code %s; '
+                            'se omite el registro de proveedor syscom.', default_code)
+                        continue
+                    l_productos_crear_vals.append({
+                        'default_code': default_code,
+                        'partner_id': ldatos['partner_id'],
+                        'id_syscom': ldatos['id_syscom'],
+                        'product_tmpl_id': tmpl_id,
+                        'syscom_inventory': ldatos['syscom_inventory'],
+                        'syscom_url': ldatos.get('syscom_url'),
+                        'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
+                    })
+                productos_procesados += 1
+        except Exception as e:
+            _logger.error(f'Error al procesar datos de Syscom: {e}', exc_info=True)
         if var._logger_info:
             _logger.info(f'Clasificación de productos de proveedor syscom completada. Total procesados: {productos_procesados}, a actualizar: {len(d_productos_actualizar)}, a crear: {len(l_productos_crear_vals)}')
         return d_productos_actualizar, l_productos_crear_vals, productos_procesados

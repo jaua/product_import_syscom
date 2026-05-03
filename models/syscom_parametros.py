@@ -6,7 +6,10 @@ class SyscomParametros():
     _archivo_csv_extension = ".csv"
     _archivo_bitacora_precios = f"{_ruta_descarga}/syscom_precios_bitacora.txt"
     _usar_bitacora_precios = True  # Variable para controlar el uso de la bitácora de precios
-    _eliminar_archivo_previo = True
+
+    def __init__(self):
+        # Atributo de instancia: su valor varía por ejecución y no debe ser compartido entre instancias
+        self._eliminar_archivo_previo = True
     _tiempo_espera_descarga = 300  # segundos
     _periodo_actualizaciones = 5  # tiempo en segundos para mostrar progreso de descarga
     _id_objetoimp = "02"  # variable global para asignar el id del objeto de impuesto a los productos importados
