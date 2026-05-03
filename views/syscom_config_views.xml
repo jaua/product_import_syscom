@@ -15,7 +15,7 @@
                 <sheet>
                     <group>
                         <group string="Configuración de Descarga">
-                            <field name="syscom_url" placeholder="https://ejemplo.syscom.mx/productos.csv"/>
+                            <field name="syscom_url_csv" placeholder="https://ejemplo.syscom.mx/productos.csv"/>
                             <field name="periodo_segundos" widget="integer"/>
                             <field name="hora_ejecucion" widget="float_time"/>
                         </group>
@@ -55,7 +55,7 @@
         <field name="model">syscom.config</field>
         <field name="arch" type="xml">
             <list string="Configuraciones Syscom">
-                <field name="syscom_url"/>
+                <field name="syscom_url_csv"/>
                 <field name="periodo_segundos"/>
                 <field name="hora_ejecucion" widget="float_time"/>
                 <field name="ganancia_porcentaje"/>
