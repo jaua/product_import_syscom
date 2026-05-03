@@ -1,8 +1,22 @@
 # Control de Cambios — Syscom Importador de Productos
 
-## [Pendiente de versión] — 2026-05-02
+## [Pendiente de versión] — 2026-05-03 (revisión 2)
 
-### Bugs corregidos
+### Bugs corregidos (segunda revisión)
+
+| # | Archivo | Línea | Descripción | Gravedad |
+|---|---------|-------|-------------|----------|
+| 9  | `models/syscom_parametros.py` | 10–13 | `__init__` definido en medio de los atributos de clase; los atributos posteriores quedaban flotando debajo del método. Reorganizado: todos los atributos de clase primero, luego `__init__` al final | Baja |
+| 10 | `models/syscom_config.py` | 580 | `datos_syscom_product` no incluía `syscom_url_imagen`, por lo que `product_url_image` en `product.template` siempre llegaba como `None` al crear o actualizar productos | Alta |
+| 11 | `models/syscom_config.py` | 963 | Mutable default arguments `l_productos_creados_vals=[]` y `d_productos_actualizados={}` en `_procesar_info_proveedor`; reemplazados por `None` con inicialización interna | Baja |
+| 12 | `models/syscom_config.py` | 98 | `datetime.now()` (hora local del servidor) comparado contra `fecha_descarga` (UTC de Odoo); diferencia de tiempo incorrecta si el servidor no está en UTC. Cambiado a `datetime.utcnow()` | Alta |
+| 13 | `models/syscom_config.py` | 420 | `import csv` dentro del método `_crear_categorias` siendo que `csv` ya está importado a nivel de módulo; importación redundante eliminada | Baja |
+
+---
+
+## [Pendiente de versión] — 2026-05-02 (revisión 1)
+
+### Bugs corregidos (primera revisión)
 
 | # | Archivo | Línea | Descripción | Gravedad |
 |---|---------|-------|-------------|----------|

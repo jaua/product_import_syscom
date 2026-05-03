@@ -95,11 +95,11 @@ class SyscomConfig(models.Model):
                 [('tipo_accion', '=', 'Descarga CSV')],
                 limit=1,
                 order='fecha_descarga desc')
-            now = datetime.now()
+            now = datetime.utcnow()
             ruta_archivo_previo = last_log.ruta_archivo if last_log else ""
 
             if last_log and last_log.fecha_descarga and last_log.ruta_archivo:
-                # Calcular diferencia de tiempo
+                # Calcular diferencia de tiempo (ambos en UTC)
                 diferencia = (now - last_log.fecha_descarga).total_seconds()
             else:
                 if var._logger_info:
@@ -417,7 +417,6 @@ class SyscomConfig(models.Model):
         Crea categorías anidadas a partir de un CSV con columnas:
         'Menu Nvl 1', 'Menu Nvl 2', 'Menu Nvl 3'.
         """
-        import csv
         categorias_creadas = 0
         # categorias_map = {}  # {(nvl1, nvl2, nvl3): id}
         with open(csv_path, 'r', encoding='utf-8-sig') as csvfile:
@@ -457,7 +456,7 @@ class SyscomConfig(models.Model):
             _logger.info(f"Categorías creadas o existentes: {categorias_creadas}")
         return categorias_creadas
 
-    def _procesar_csv(self, ruta_archivo) -> None:
+    def _procesar_csv(self, ruta_archivo_csv) -> None:
         """Procesar el archivo CSV e importar productos.
         Parametros:
             ruta_archivo (str): Ruta del archivo CSV a procesar.
@@ -465,7 +464,7 @@ class SyscomConfig(models.Model):
         categorias_filtro = []
         self.ensure_one()
         if var._logger_info:
-            _logger.info(f'Inicia procesado de CSV, desde archivo: {ruta_archivo}')
+            _logger.info(f'Inicia procesado de CSV, desde archivo: {ruta_archivo_csv}')
 
         if self.categorias_importar:
             categorias_filtro = [
@@ -496,15 +495,15 @@ class SyscomConfig(models.Model):
                                tipo_operacion='Proveedor Existente')
 
         try:
-            datos_product_template, datos_syscom_proveedor, tipo_cambio_csv, codigos_procesar = self._leer_csv(ruta_archivo, categorias_filtro, datos_proveedor.id)
-            d_productos_actualizar, l_productos_crear_vals, productos_procesados = self._clasificar_productos(datos_product_template, codigos_procesar)
-            d_prod_syscom_actualizar, l_prod_syscom_crear_vals, prod_syscom_procesados = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesar)
+            datos_syscom_product, datos_syscom_proveedor, tipo_cambio_csv, codigos_procesados = self._leer_csv(ruta_archivo_csv, categorias_filtro, datos_proveedor.id)
+            d_productos_actualizar, l_productos_crear_vals, productos_procesados = self._clasificar_productos(datos_syscom_product, codigos_procesados)
+            d_prod_syscom_actualizar, l_prod_syscom_crear_vals, prod_syscom_procesados = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesados)
             productos_actualizados = self._procesar_batch_actualizacion(d_productos_actualizar)
             productos_creados = self._procesar_batch_creacion(l_productos_crear_vals)
             provider_actualizados = self._procesar_batch_actualizacion_syscom_provider(d_prod_syscom_actualizar)
             provider_creados = self._procesar_batch_creacion_syscom_provider(l_prod_syscom_crear_vals)
             productos_registrados = self._procesar_info_proveedor(l_productos_crear_vals, d_productos_actualizar, datos_proveedor)
-            self._registrar_log_importacion(ruta_archivo, tipo_cambio_csv, productos_procesados, productos_creados, productos_actualizados)
+            self._registrar_log_importacion(ruta_archivo_csv, tipo_cambio_csv, productos_procesados, productos_creados, productos_actualizados)
         except Exception as e:
             _logger.error(f'Error procesando CSV: {str(e)}')
             raise UserError(f'Error al procesar el archivo CSV: {str(e)}')
@@ -514,10 +513,10 @@ class SyscomConfig(models.Model):
         Returns:
             tuple: Una tupla con las filas de datos, el tipo de cambio y los códigos a procesar.
         """
-        datos_product_template = []
+        datos_syscom_product = []
         datos_syscom_proveedor = []
         tipo_cambio_csv = None
-        codigos_procesar = []
+        codigos_procesados = []
         marca_cache = {}  # Cache para marcas ya procesadas
         with open(ruta_archivo, 'r', encoding='utf-8-sig') as archivo_csv:
             lector_csv = csv.DictReader(archivo_csv)
@@ -526,6 +525,7 @@ class SyscomConfig(models.Model):
                     menu_nvl1 = fila_datos_csv.get('Menu Nvl 1', '').strip()
                     if menu_nvl1 not in categorias_filtro:
                         continue
+
                 default_code = fila_datos_csv.get(
                     'Modelo',
                     '').strip()
@@ -576,7 +576,7 @@ class SyscomConfig(models.Model):
                     continue
                 standard_price, list_price = precios
                 list_categoria_path = [menu_nvl1, menu_nvl2, menu_nvl3]
-                datos_product_template.append({
+                datos_syscom_product.append({
                     'default_code': default_code,
                     'name': name,
                     'standard_price': standard_price,
@@ -586,6 +586,7 @@ class SyscomConfig(models.Model):
                     'cat_unidad_medida': var._id_cat_unidad_medida,
                     'clave_producto': clave_producto,
                     'syscom_url': syscom_url,
+                    'syscom_url_imagen': syscom_url_imagen,
                     'product_brand_id': marca_id,
                 })
                 datos_syscom_proveedor.append({
@@ -599,10 +600,11 @@ class SyscomConfig(models.Model):
                     # 'syscom_obsoleto': syscom_obsoleto,
                 })
 
-                codigos_procesar.append(default_code)
+                codigos_procesados.append(default_code)
         if var._logger_info:
-            _logger.info(f'CSV procesado completamente. Total filas procesadas: {len(datos_product_template)}')
-        return datos_product_template, datos_syscom_proveedor, tipo_cambio_csv, codigos_procesar
+            _logger.info(f'CSV procesado completamente. Total filas procesadas: {len(datos_syscom_product)}')
+
+        return datos_syscom_product, datos_syscom_proveedor, tipo_cambio_csv, codigos_procesados
 
     def _calcular_precios(self, su_precio, tipo_cambio_csv) -> tuple:
         """Calcula el precio estándar y el precio de venta.
@@ -660,7 +662,7 @@ class SyscomConfig(models.Model):
             _logger.warning('El módulo product_brand no está instalado, no se asignará marca a los productos importados.')
             return marca_id
 
-    def _clasificar_productos(self, datos_product_template, codigos_procesar) -> tuple:
+    def _clasificar_productos(self, datos_syscom_product, codigos_a_procesar) -> tuple:
         """Clasifica los productos en dos grupos: los que se deben actualizar.
         y los que se deben crear.
         Para los productos a actualizar, se construye un diccionario con los
@@ -680,13 +682,13 @@ class SyscomConfig(models.Model):
         productos_procesados = 0
         productos_existentes = {}
 
-        if codigos_procesar:
+        if codigos_a_procesar:
             productos_actuales = self.env['product.template'].search([
-                ('default_code', 'in', codigos_procesar)
+                ('default_code', 'in', codigos_a_procesar)
             ])
             productos_existentes = {p.default_code: p for p in productos_actuales}
         # Preparar los datos para actualización o creación
-        for linea_datos in datos_product_template:
+        for linea_datos in datos_syscom_product:
             default_code = linea_datos['default_code']
             categoria = self._get_or_create_category_from_parts(
                 linea_datos['categoria_path']
@@ -958,7 +960,11 @@ class SyscomConfig(models.Model):
         except Exception as e:
             _logger.error(f'Error al registrar log: {str(e)}')
 
-    def _procesar_info_proveedor(self, l_productos_creados_vals=[], d_productos_actualizados={}, proveedor_info=None):
+    def _procesar_info_proveedor(self, l_productos_creados_vals=None, d_productos_actualizados=None, proveedor_info=None):
+        if l_productos_creados_vals is None:
+            l_productos_creados_vals = []
+        if d_productos_actualizados is None:
+            d_productos_actualizados = {}
         registros_procesados = 0
         total_productos = len(l_productos_creados_vals) + len(d_productos_actualizados)
         productos_vals = l_productos_creados_vals + list(d_productos_actualizados.values())

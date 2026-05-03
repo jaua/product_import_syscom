@@ -1,31 +1,31 @@
 class SyscomParametros():
-    _proveedor_nombre = "Syscom"  # Nombre del proveedor para asociar a los productos importados
+    _proveedor_nombre = "Syscom"
     _ruta_descarga = "/tmp/syscom_downloads"
     _archivo_prueba = f"{_ruta_descarga}/verifica.txt"
     _archivo_csv_prefijo = "syscom_products_"
     _archivo_csv_extension = ".csv"
     _archivo_bitacora_precios = f"{_ruta_descarga}/syscom_precios_bitacora.txt"
-    _usar_bitacora_precios = True  # Variable para controlar el uso de la bitácora de precios
+    _usar_bitacora_precios = True
+    _tiempo_espera_descarga = 300
+    _periodo_actualizaciones = 5
+    _id_objetoimp = "02"
+    _id_cat_unidad_medida = 1
+    _categoria_separador = ' \ '
+    _registros_por_batch = 2000
+    _mxn_valor = 1.0
+    _digitos_redondeo = 2
+    _sin_marca_nombre = "S/M"
+    _logger_info = True
+    _logger_debug = False
+    _mostrar_progreso = True
+    _progreso_intervalo = 10
+    _actualizar_precios = True
+    _actualizar_inventario = True
+    _actualizar_url = True
+    _actualizar_url_imagen = True
+    _actualizar_obsoleto = True
+    _crear_productos_nuevos = True
 
     def __init__(self):
         # Atributo de instancia: su valor varía por ejecución y no debe ser compartido entre instancias
         self._eliminar_archivo_previo = True
-    _tiempo_espera_descarga = 300  # segundos
-    _periodo_actualizaciones = 5  # tiempo en segundos para mostrar progreso de descarga
-    _id_objetoimp = "02"  # variable global para asignar el id del objeto de impuesto a los productos importados
-    _id_cat_unidad_medida = 1  # variable global para asignar la categoría de unidad de medida a los productos importados
-    _categoria_separador = ' \ '  # Separador para construir la ruta de categorías anidadas
-    _registros_por_batch = 2000  # cantidad de registros a procesar por batch en la creación de productos_
-    _mxn_valor = 1.0  # Valor de respaldo para convertir USD a MXN si no se encuentra en el CSV o en la configuración
-    _digitos_redondeo = 2  # Cantidad de dígitos para redondear la tasa de cambio al actualizarla desde el CSV o al calcular precios
-    _sin_marca_nombre = "S/M"  # Nombre de marca por defecto para productos sin marca especificada
-    _logger_info = True  # Variable para controlar el nivel de detalle de los logs (True para info, False para solo errores)
-    _logger_debug = False  # Variable para controlar la impresión de logs de depuración (True para mostrar, False para ocultar)
-    _mostrar_progreso = True  # Variable para controlar la impresión de progreso en la consola
-    _progreso_intervalo = 10  # Intervalo en segundos para mostrar el progreso durante la descarga y procesamiento de productos
-    _actualizar_precios = True  # Variable para controlar si se actualizan los precios de los productos importados (True para actualizar, False para mantener precios actuales)
-    _actualizar_inventario = True  # Variable para controlar si se actualiza el inventario de los productos importados (True para actualizar, False para mantener inventario actual)
-    _actualizar_url = True  # Variable para controlar si se actualiza la URL de los productos importados (True para actualizar, False para mantener URL actual)
-    _actualizar_url_imagen = True  # Variable para controlar si se actualiza la URL de imagen de los productos importados (True para actualizar, False para mantener URL de imagen actual)
-    _actualizar_obsoleto = True  # Variable para controlar si se actualiza el estado de obsoleto de los productos importados (True para actualizar, False para mantener estado actual)
-    _crear_productos_nuevos = True  # Variable para controlar si se crean nuevos productos para los registros de Syscom que no tienen un producto existente asociado (True para crear, False para omitir creación)
