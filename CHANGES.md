@@ -1,5 +1,24 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-05-06 (revisión 4 — antipatrones)
+
+### Antipatrones corregidos
+
+| #  | Archivo | Descripción | Tipo |
+|----|---------|-------------|------|
+| 19 | `syscom_config.py` | `_crear_categorias` eliminado (código muerto; nunca se invocaba) | Dead code |
+| 20 | `syscom_config.py` | `_asignar_impuestos` eliminado (código muerto; impuestos ya se asignan en `_procesar_batch_creacion`) | Dead code |
+| 21 | `syscom_config.py` | `_get_or_create_category_from_parts` ahora recibe `categoria_cache`; elimina N+1 queries al reutilizar búsquedas de categorías entre productos | Rendimiento |
+| 22 | `syscom_config.py` | `_csv_limpiar`: fallback `self._ruta_archivo_csv` (atributo inexistente) reemplazado por `ValueError` explícito | Fallo latente |
+| 23 | `syscom_config.py` | `tasa_cambio: "0.0"` (string) → `0.0` (float) en creates de `syscom.log` | Tipo incorrecto |
+| 24 | `syscom_config.py` | `self.get_config()` sobre `self` eliminado en `ejecutar_importacion` y `_descargar_csv`; se usa `self` directamente | Redundancia |
+| 25 | `syscom_config.py` | `lista_categorias_importadas = ''` declarada prematuramente eliminada; se usa `self.categorias_importar` donde se necesita | Claridad |
+| 26 | `syscom_config.py` | `menu_nvl1` leído dos veces en `_leer_csv`; segunda lectura redundante eliminada | Redundancia |
+| 27 | `syscom_config.py` | `_set_or_create_brand` movido después del check `if not default_code or not name`; evita crear marcas huérfanas | Lógica |
+| 28 | `syscom_config.py` | `if (var._usar_bitacora_precios is False):` → `if not var._usar_bitacora_precios:` (3 ocurrencias) | Estilo |
+
+---
+
 ## [Pendiente de versión] — 2026-05-06 (revisión 3)
 
 ### Bugs corregidos (_clasificar_syscom_provider)

@@ -85,7 +85,7 @@ class SyscomConfig(models.Model):
         try:
             if var._logger_info:
                 _logger.info('Iniciando importación manual desde Syscom')
-            tiempo_limite_seg = self.get_config().periodo_segundos
+            tiempo_limite_seg = self.periodo_segundos
             diferencia = 3600  # Valor inicial alto
             ruta_archivo_previo = ""
             reutilizar_archivo = False
@@ -193,16 +193,15 @@ class SyscomConfig(models.Model):
                 if var._logger_info:
                     _logger.info(f"Syscom: Archivo previo disponible para respaldo: {previous_file}")
 
-            # actualizar la propiedad tipo de tasa de cambio con la presente en currency "base.USD"
-            self.get_config().tasa_cambio = round((var._mxn_valor /
-                                                   self.env.ref('base.USD').rate),
-                                                  var._digitos_redondeo)
+            # actualizar la tasa de cambio con la presente en currency "base.USD"
+            self.tasa_cambio = round((var._mxn_valor /
+                                      self.env.ref('base.USD').rate),
+                                     var._digitos_redondeo)
             # Iniciar tiempo de descarga
             start_time = datetime.now()
             last_print_time = start_time
             last_print_size = 0
             total_size = 0
-            lista_categorias_importadas = ''
 
             # Para mostrar en consola/registro
             def print_progress(current_size, total_size=None):
@@ -312,15 +311,14 @@ class SyscomConfig(models.Model):
 
             # Registrar en bitácora
             file_size = os.path.getsize(file_path)
-            lista_categorias_importadas = self.get_config().categorias_importar
             resultado = self.env['syscom.log'].create({
                 'fecha_descarga': fields.Datetime.now(),
                 'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
                 'ruta_archivo': file_path,
                 'url_origen': self.syscom_url_csv,
-                'categorias_importadas': lista_categorias_importadas,
+                'categorias_importadas': self.categorias_importar or '----',
                 'tipo_accion': 'Descarga CSV',
-                'tasa_cambio': "0.0",  # Se actualizará con la tasa real al procesar el CSV, si se encuentra en él
+                'tasa_cambio': 0.0,
             })
 
             if var._logger_info:
@@ -381,7 +379,8 @@ class SyscomConfig(models.Model):
         Retorna:
             str: Ruta del archivo respaldo.
         """
-        ruta_csv_inicial = ruta_csv_inicial or self._ruta_archivo_csv
+        if not ruta_csv_inicial:
+            raise ValueError('_csv_limpiar requiere una ruta de archivo válida.')
         ruta_csv_salida = ruta_csv_inicial + ".tmp"
         ruta_csv_respaldo = ruta_csv_inicial + "_bak"
 
@@ -404,57 +403,13 @@ class SyscomConfig(models.Model):
                 'url_origen': ruta_csv_inicial,
                 'tipo_accion': 'Limpieza CSV',
                 'categorias_importadas': '----',
-                'tasa_cambio': "0.0",
+                'tasa_cambio': 0.0,
             })
 
             return ruta_csv_respaldo
 
         except Exception as e:
             raise UserError(f'Error fatal al limpiar CSV, funcion csv_limpiar_pd: {str(e)}')
-
-    def _crear_categorias(self, csv_path):
-        """
-        Crea categorías anidadas a partir de un CSV con columnas:
-        'Menu Nvl 1', 'Menu Nvl 2', 'Menu Nvl 3'.
-        """
-        categorias_creadas = 0
-        # categorias_map = {}  # {(nvl1, nvl2, nvl3): id}
-        with open(csv_path, 'r', encoding='utf-8-sig') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                nvl1 = row.get('Menu Nvl 1', '').strip()
-                nvl2 = row.get('Menu Nvl 2', '').strip()
-                nvl3 = row.get('Menu Nvl 3', '').strip()
-                parent_id = False
-                # Nivel 1
-                if nvl1:
-                    cat1 = self.env['product.category'].search([
-                        ('name', '=', nvl1), ('parent_id', '=', False)
-                        ], limit=1)
-                    if not cat1:
-                        cat1 = self.env['product.category'].create({'name': nvl1, 'parent_id': False})
-                        categorias_creadas += 1
-                    parent_id = cat1.id
-                # Nivel 2
-                if nvl2:
-                    cat2 = self.env['product.category'].search([
-                        ('name', '=', nvl2), ('parent_id', '=', parent_id)
-                        ], limit=1)
-                    if not cat2:
-                        cat2 = self.env['product.category'].create({'name': nvl2, 'parent_id': parent_id})
-                        categorias_creadas += 1
-                    parent_id = cat2.id
-                # Nivel 3
-                if nvl3:
-                    cat3 = self.env['product.category'].search([
-                        ('name', '=', nvl3), ('parent_id', '=', parent_id)
-                        ], limit=1)
-                    if not cat3:
-                        cat3 = self.env['product.category'].create({'name': nvl3, 'parent_id': parent_id})
-                        categorias_creadas += 1
-        if var._logger_info:
-            _logger.info(f"Categorías creadas o existentes: {categorias_creadas}")
-        return categorias_creadas
 
     def _procesar_csv(self, ruta_archivo_csv) -> None:
         """Procesar el archivo CSV e importar productos.
@@ -526,40 +481,22 @@ class SyscomConfig(models.Model):
                     if menu_nvl1 not in categorias_filtro:
                         continue
 
-                default_code = fila_datos_csv.get(
-                    'Modelo',
-                    '').strip()
-                name = fila_datos_csv.get(
-                    'Título',
-                    '').strip()
-                if name == '':
+                default_code = fila_datos_csv.get('Modelo', '').strip()
+                name = fila_datos_csv.get('Título', '').strip()
+                if not default_code or not name:
                     continue
-                su_precio = fila_datos_csv.get(
-                    'Su Precio',
-                    '0').strip()
-                tipo_cambio_str = fila_datos_csv.get(
-                    'Tipo de Cambio',
-                    '').strip()
-                marca_nombre = fila_datos_csv.get(
-                    'Marca',
-                    var._sin_marca_nombre).strip()
-                marca_id = self._set_or_create_brand(marca_nombre,
-                                                     marca_cache)
+                su_precio = fila_datos_csv.get('Su Precio', '0').strip()
+                tipo_cambio_str = fila_datos_csv.get('Tipo de Cambio', '').strip()
+                marca_nombre = fila_datos_csv.get('Marca', var._sin_marca_nombre).strip()
+                marca_id = self._set_or_create_brand(marca_nombre, marca_cache)
 
                 if tipo_cambio_str and not tipo_cambio_csv:
                     try:
-                        tipo_cambio_csv = round(
-                            float(tipo_cambio_str.replace(',', '')),
-                            2)
+                        tipo_cambio_csv = round(float(tipo_cambio_str.replace(',', '')), 2)
                         if var._logger_info:
-                            _logger.info(
-                            f"Tipo de Cambio "
-                            f"detectado en CSV: {tipo_cambio_csv}")
+                            _logger.info('Tipo de Cambio detectado en CSV: %s', tipo_cambio_csv)
                     except Exception:
-                        _logger.warning(
-                            f"No se pudo parsear 'Tipo de Cambio' "
-                            f"desde el CSV: {tipo_cambio_str}")
-                menu_nvl1 = fila_datos_csv.get('Menu Nvl 1', '').strip()
+                        _logger.warning('No se pudo parsear Tipo de Cambio desde el CSV: %s', tipo_cambio_str)
                 menu_nvl2 = fila_datos_csv.get('Menu Nvl 2', '').strip()
                 menu_nvl3 = fila_datos_csv.get('Menu Nvl 3', '').strip()
                 id_syscom = fila_datos_csv.get('ID Producto', '').strip()
@@ -567,9 +504,6 @@ class SyscomConfig(models.Model):
                 syscom_url = fila_datos_csv.get('Link SYSCOM', '').strip()
                 syscom_url_imagen = fila_datos_csv.get('Imagen Principal', '').strip()
                 syscom_inventory = fila_datos_csv.get('Existencias', '0').strip()
-                # syscom_obsoleto = fila_datos_csv.get('Obsoleto', 'No').strip().lower() in ['si', 'sí', 'yes', 'true', '1']
-                if not default_code or not name:
-                    continue
                 precios = self._calcular_precios(su_precio, tipo_cambio_csv)
                 if not precios:
                     _logger.warning(f'Precio inválido para producto {default_code}')
@@ -687,11 +621,11 @@ class SyscomConfig(models.Model):
                 ('default_code', 'in', codigos_a_procesar)
             ])
             productos_existentes = {p.default_code: p for p in productos_actuales}
-        # Preparar los datos para actualización o creación
+        categoria_cache = {}
         for linea_datos in datos_syscom_product:
             default_code = linea_datos['default_code']
             categoria = self._get_or_create_category_from_parts(
-                linea_datos['categoria_path']
+                linea_datos['categoria_path'], categoria_cache
             )
             if default_code in productos_existentes:
                 product = productos_existentes[default_code]
@@ -826,7 +760,7 @@ class SyscomConfig(models.Model):
                     porcentaje = (count / total * 100) if total > 0 else 0
                     if var._logger_info:
                         _logger.info(f'Progreso de actualización: {porcentaje:.2f}% ({count}/{total})')
-                if (var._usar_bitacora_precios is False):
+                if not var._usar_bitacora_precios:
                     continue
                 try:
                     # product = self.env['product.template'].browse(product_id)
@@ -880,7 +814,7 @@ class SyscomConfig(models.Model):
                 try:
                     created_chunk = self.env['product.template'].create(chunk)
                     product_template |= created_chunk
-                    if (var._usar_bitacora_precios is False):
+                    if not var._usar_bitacora_precios:
                         continue
                     for product in created_chunk:
                         registrar_bitacora_precios(f"Producto creado: {product.default_code} - Precio: {product.list_price}")
@@ -892,7 +826,7 @@ class SyscomConfig(models.Model):
                         try:
                             product = self.env['product.template'].create(vals)
                             product_template |= product
-                            if (var._usar_bitacora_precios is False):
+                            if not var._usar_bitacora_precios:
                                 continue
                             registrar_bitacora_precios(f"Producto creado: {product.default_code} - Precio: {product.list_price}")
                         except Exception as e_individual:
@@ -1044,51 +978,36 @@ class SyscomConfig(models.Model):
         except Exception:
             _logger.exception('No se pudo registrar la tasa de cambio en la bitácora')
 
-    # metodo para modificar los modelos de impuestos en product.template, para asignar el impuesto de iva 16% a los productos importados
-    # y el impuesto del 16% de iva en ventas
-    def _asignar_impuestos(self, product_template):
-        """Asignar impuestos a producto importado"""
-        try:
-            # Buscar el impuesto de IVA 16% (ajustar según tu configuración)
-            tax_iva_16 = self.env['account.tax'].search([('amount', '=', 16), ('type_tax_use', '=', 'sale')], limit=1)
-            if tax_iva_16:
-                product_template.taxes_id = [(6, 0, [tax_iva_16.id])]
-                if var._logger_info:
-                    _logger.info(f'Impuesto IVA 16% asignado al producto {product_template.default_code}')
-            else:
-                _logger.warning('No se encontró el impuesto de IVA 16% para asignar.')
-        except Exception as e:
-            _logger.error(f'Error al asignar impuestos: {str(e)}')
-            raise UserError(f'Error al asignar impuestos al producto: {str(e)}')
-
-    def _get_or_create_category_from_parts(self, lst_categorias) -> int:
-        """Obtener o crear categoría desde lista de partes ya separadas
-
-        Args:
-            parts_list: Lista de strings con cada nivel ['Nivel1', 'Nivel2', 'Nivel3']
-
-        Returns:
-            Registro de product.category o None
+    def _get_or_create_category_from_parts(self, lst_categorias, categoria_cache=None):
+        """Obtener o crear categoría desde lista de partes ya separadas.
+        categoria_cache: dict {(nombre, parent_id) -> recordset} compartido entre llamadas
+        para evitar N+1 queries cuando se procesan múltiples productos.
         """
-        categoria_id = 0
+        if categoria_cache is None:
+            categoria_cache = {}
+        categoria_id = False
         parent_id = False
 
         if not lst_categorias:
             return categoria_id
-        # Filtrar partes vacías
         lista_filtrada = [p.strip() for p in lst_categorias if p and p.strip()]
         if not lista_filtrada:
             return categoria_id
         for categoria_nombre in lista_filtrada:
-            categoria_id = self.env['product.category'].search([
-                ('name', '=', categoria_nombre),
-                ('parent_id', '=', parent_id)
-            ], limit=1)
-            if not categoria_id:
-                categoria_id = self.env['product.category'].create({
-                    'name': categoria_nombre,
-                    'parent_id': parent_id,
-                })
+            cache_key = (categoria_nombre, parent_id)
+            if cache_key in categoria_cache:
+                categoria_id = categoria_cache[cache_key]
+            else:
+                categoria_id = self.env['product.category'].search([
+                    ('name', '=', categoria_nombre),
+                    ('parent_id', '=', parent_id)
+                ], limit=1)
+                if not categoria_id:
+                    categoria_id = self.env['product.category'].create({
+                        'name': categoria_nombre,
+                        'parent_id': parent_id,
+                    })
+                categoria_cache[cache_key] = categoria_id
             parent_id = categoria_id.id
         return categoria_id
 
