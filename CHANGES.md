@@ -1,5 +1,19 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-05-06 (revisión 3)
+
+### Bugs corregidos (_clasificar_syscom_provider)
+
+| #  | Archivo | Descripción | Gravedad |
+|----|---------|-------------|----------|
+| 14 | `models/syscom_config.py` | `datos_syscom_proveedor=None` causaba `TypeError` silenciosa en el `for`; normalizado a `[]` al inicio del método | Alta |
+| 15 | `models/syscom_config.py` | `syscom_inventory` llegaba como `str` desde el CSV pero `fields.Integer` requiere `int`; añadida conversión con fallback a `0` | Alta |
+| 16 | `models/syscom_config.py` | `producto_id_map` no se inicializaba si `datos_syscom_proveedor` era falsy, dejando la variable indefinida; inicializado a `{}` al inicio | Media |
+| 17 | `models/syscom_config.py` | Contador `omitidos` añadido para registrar en el log cuántos registros se saltaron por `tmpl_id` no encontrado | Baja |
+| 18 | `models/syscom_config.py` | Comentarios obsoletos incorrectos eliminados (decían "usar supplierinfo" dentro del modelo que ya es el separado) | Baja |
+
+---
+
 ## [Pendiente de versión] — 2026-05-03 (revisión 2)
 
 ### Bugs corregidos (segunda revisión)
