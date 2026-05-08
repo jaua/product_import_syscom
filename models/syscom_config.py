@@ -12,6 +12,7 @@ import csv
 import os
 import logging
 import shutil
+from psycopg2.errors import UniqueViolation
 
 var = Parametros()
 _logger = logging.getLogger(__name__)
@@ -451,14 +452,15 @@ class SyscomConfig(models.Model):
                 productos_procesados,
             ) = self._clasificar_syscom_product(datos_syscom_product, codigos_procesados)
 
+            productos_actualizados = self._procesar_batch_actualizacion(d_productos_actualizar)
+            productos_creados = self._procesar_batch_creacion(l_productos_crear_vals)
+
             (
                 d_prod_syscom_actualizar,
                 l_prod_syscom_crear_vals,
                 prod_syscom_procesados,
             ) = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesados)
 
-            productos_actualizados = self._procesar_batch_actualizacion(d_productos_actualizar)
-            productos_creados = self._procesar_batch_creacion(l_productos_crear_vals)
             provider_actualizados = self._procesar_batch_actualizacion_syscom_provider(d_prod_syscom_actualizar)
             provider_creados = self._procesar_batch_creacion_syscom_provider(l_prod_syscom_crear_vals)
 
@@ -481,20 +483,27 @@ class SyscomConfig(models.Model):
         datos_syscom_product = []
         datos_syscom_provider = []
         tipo_cambio_csv = None
-        codigos_procesados = []
+        lista_codigos_procesados = []
         marca_cache = {}  # Cache para marcas ya procesadas
+        contador_de_lineas_csv = 0
+        contador_de_procesados = 0
+
         with open(ruta_archivo, 'r', encoding='utf-8-sig') as archivo_csv:
             lector_csv = csv.DictReader(archivo_csv)
+
             for fila_datos_csv in lector_csv:
-                if categorias_filtro:
-                    menu_nvl1 = fila_datos_csv.get('Menu Nvl 1', '').strip()
-                    if menu_nvl1 not in categorias_filtro:
-                        continue
+                contador_de_lineas_csv += 1
+                menu_nvl1 = fila_datos_csv.get('Menu Nvl 1', '').strip()
+
+                if (categorias_filtro and menu_nvl1 not in categorias_filtro):
+                    continue
 
                 default_code = fila_datos_csv.get('Modelo', '').strip()
                 name = fila_datos_csv.get('Título', '').strip()
+
                 if not default_code or not name:
                     continue
+
                 su_precio = fila_datos_csv.get('Su Precio', '0').strip()
                 tipo_cambio_str = fila_datos_csv.get('Tipo de Cambio', '').strip()
                 marca_nombre = fila_datos_csv.get('Marca', var._sin_marca_nombre).strip()
@@ -507,6 +516,7 @@ class SyscomConfig(models.Model):
                             _logger.info('Tipo de Cambio detectado en CSV: %s', tipo_cambio_csv)
                     except Exception:
                         _logger.warning('No se pudo parsear Tipo de Cambio desde el CSV: %s', tipo_cambio_str)
+
                 menu_nvl2 = fila_datos_csv.get('Menu Nvl 2', '').strip()
                 menu_nvl3 = fila_datos_csv.get('Menu Nvl 3', '').strip()
                 id_syscom = fila_datos_csv.get('ID Producto', '').strip()
@@ -515,11 +525,14 @@ class SyscomConfig(models.Model):
                 syscom_url_imagen = fila_datos_csv.get('Imagen Principal', '').strip()
                 syscom_inventory = fila_datos_csv.get('Existencias', '0').strip()
                 precios = self._calcular_precios(su_precio, tipo_cambio_csv)
+
                 if not precios:
                     _logger.warning(f'Precio inválido para producto {default_code}')
                     continue
+
                 standard_price, list_price = precios
                 list_categoria_path = [menu_nvl1, menu_nvl2, menu_nvl3]
+
                 datos_syscom_product.append({
                     'default_code': default_code,
                     'name': name,
@@ -533,6 +546,7 @@ class SyscomConfig(models.Model):
                     'syscom_url_imagen': syscom_url_imagen,
                     'product_brand_id': marca_id,
                 })
+
                 datos_syscom_provider.append({
                     'default_code': default_code,
                     'partner_id': syscom_provider_id,
@@ -544,11 +558,18 @@ class SyscomConfig(models.Model):
                     # 'syscom_obsoleto': syscom_obsoleto,
                 })
 
-                codigos_procesados.append(default_code)
-        if var._logger_info:
-            _logger.info(f'CSV procesado completamente. Total filas procesadas: {len(datos_syscom_product)}')
+                lista_codigos_procesados.append(default_code)
+                contador_de_procesados += 1
 
-        return datos_syscom_product, datos_syscom_provider, tipo_cambio_csv, codigos_procesados
+        if var._logger_info:
+            _logger.info(f'CSV procesado completamente. Total filas procesadas: {contador_de_lineas_csv}, Productos a importar: {contador_de_procesados}')
+
+        resultados = (datos_syscom_product,
+                      datos_syscom_provider,
+                      tipo_cambio_csv,
+                      lista_codigos_procesados)
+
+        return resultados
 
     def _calcular_precios(self, su_precio, tipo_cambio_csv) -> tuple:
         """Calcula el precio estándar y el precio de venta.
@@ -618,7 +639,7 @@ class SyscomConfig(models.Model):
         """
 
         if var._logger_info:
-            _logger.info('Clasificando productos para importación...')
+            _logger.info('Clasificando productos para importación en product.template...')
 
         d_productos_actualizar = {}
         l_productos_crear_vals = []
@@ -868,22 +889,26 @@ class SyscomConfig(models.Model):
             for i in range(0, len(productos_crear_vals), batch_size):
                 chunk = productos_crear_vals[i:i+batch_size]
                 try:
-                    created_chunk = self.env['product.provider.syscom'].create(chunk)
-                    if created_chunk:
+                    with self.env.cr.savepoint():
+                        created_chunk = self.env['product.provider.syscom'].create(chunk)
                         productos_creados += len(created_chunk)
                 except Exception as e:
                     _logger.error(f'Error creando batch de proveedor syscom (offset {i}): {e}', exc_info=True)
-                    if var._logger_info:
-                        _logger.info(f'Intentando crear registros de proveedor syscom uno por uno para identificar errores...')
                     for vals in chunk:
                         try:
-                            record = self.env['product.provider.syscom'].create(vals)
-                            if record:
+                            with self.env.cr.savepoint():
+                                self.env['product.provider.syscom'].create(vals)
                                 productos_creados += 1
+                        except UniqueViolation:
+                            _logger.warning(
+                                'Duplicado omitido — id_syscom=%s partner_id=%s ya existe.',
+                                vals.get('id_syscom'), vals.get('partner_id'),
+                            )
                         except Exception as e_individual:
-                            _logger.error(f'Error creando registro de proveedor syscom para producto {vals.get("default_code", "N/A")}: {e_individual}', exc_info=True)
-                            if var._logger_info:
-                                _logger.info(f'Valores del registro de proveedor syscom con error: {vals}')
+                            _logger.error(
+                                f'Error creando proveedor syscom para {vals.get("default_code", "N/A")}: {e_individual}',
+                                exc_info=True,
+                            )
         return productos_creados
 
     def _log_crear(self, vals: dict) -> int:
