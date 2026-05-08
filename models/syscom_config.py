@@ -223,6 +223,7 @@ class SyscomConfig(models.Model):
                         )
                     last_print_time = current_time
                     last_print_size = current_size
+            # def print_progress
 
             response = requests.get(
                 self.syscom_url_csv,
@@ -285,9 +286,8 @@ class SyscomConfig(models.Model):
                     file_path,
                 )
 
-
             file_size = os.path.getsize(file_path)
-            resultado = self.env['syscom.log'].create({
+            log_id = self._log_crear({
                 'fecha_descarga': fields.Datetime.now(),
                 'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
                 'ruta_archivo': file_path,
@@ -298,7 +298,7 @@ class SyscomConfig(models.Model):
             })
 
             if var._logger_info:
-                _logger.info(f"Syscom: Registro creado en bitácora con ID {resultado.id} para la descarga realizada.")
+                _logger.info(f"Syscom: Registro creado en bitácora con ID {log_id} para la descarga realizada.")
 
             return file_path
         except requests.RequestException as e:
@@ -374,7 +374,7 @@ class SyscomConfig(models.Model):
 
             # Paso 3: Log en Odoo
             file_size = os.path.getsize(ruta_csv_inicial)
-            self.env['syscom.log'].create({
+            self._log_crear({
                 'fecha_descarga': fields.Datetime.now(),
                 'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
                 'ruta_archivo': ruta_csv_inicial,
@@ -876,9 +876,16 @@ class SyscomConfig(models.Model):
                                 _logger.info(f'Valores del registro de proveedor syscom con error: {vals}')
         return productos_creados
 
+    def _log_crear(self, vals: dict) -> int:
+        """Persiste un registro en syscom.log usando su propio cursor,
+        garantizando que sobrevive a rollbacks de la transacción principal."""
+        with self.env.registry.cursor() as new_cr:
+            new_env = api.Environment(new_cr, self.env.uid, {})
+            return new_env['syscom.log'].create(vals).id
+
     def _registrar_log(self, descripcion='Falta descripcion', tipo_operacion='Operacion no especificada'):
         try:
-            self.env['syscom.log'].create({
+            self._log_crear({
                 'fecha_descarga': fields.Datetime.now(),
                 'tamano_descarga': 'NA',
                 'ruta_archivo': '----',
@@ -959,7 +966,7 @@ class SyscomConfig(models.Model):
             file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
             categorias_importadas = self.categorias_importar or '----'
             tasa_log = tipo_cambio_csv if tipo_cambio_csv else (getattr(self, 'tasa_cambio', None) or 0.0)
-            self.env['syscom.log'].create({
+            self._log_crear({
                 'fecha_descarga': fields.Datetime.now(),
                 'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',
                 'ruta_archivo': filepath,
