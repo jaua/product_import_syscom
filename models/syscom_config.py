@@ -5,7 +5,7 @@
 from odoo import models, fields, api
 from odoo.exceptions import UserError
 from datetime import datetime
-from .csv_utilerias import  normaliza_csv
+from .csv_utilerias import normaliza_csv
 from .syscom_parametros import SyscomParametros as Parametros
 import requests
 import csv
@@ -17,7 +17,7 @@ var = Parametros()  # Instancia de la clase para acceder a sus variables
 _logger = logging.getLogger(__name__)
 
 
-# Funcion de bitacora a archivo de texto (opcional, se puede usar solo el modelo syscom.log para registrar eventos)
+
 def registrar_bitacora_precios(mensaje):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     try:
@@ -90,7 +90,6 @@ class SyscomConfig(models.Model):
             ruta_archivo_previo = ""
             reutilizar_archivo = False
 
-            # 2. Verificar última descarga en bitácora
             last_log = self.env['syscom.log'].search(
                 [('tipo_accion', '=', 'Descarga CSV')],
                 limit=1,
@@ -121,7 +120,6 @@ class SyscomConfig(models.Model):
             else:
                 reutilizar_archivo = False
 
-            # 3. Descarga o Reutilización
             if reutilizar_archivo:
                 # Si reutilizamos, simplemente procesamos
                 if var._logger_info:
@@ -150,7 +148,6 @@ class SyscomConfig(models.Model):
 
             self._procesar_csv(archivo_ruta)
 
-            # Si procesamos sin errores, limpiar archivos antiguos descargados
             self._limpiar_archivos_antiguos(archivo_ruta)
 
             return {
@@ -176,8 +173,6 @@ class SyscomConfig(models.Model):
                 'Accept-Language': 'es-MX,es;q=0.9,en;q=0.8',
                 'Connection': 'keep-alive',
             }
-            # Configurar sesión y URL (tu código actual)
-            # ...
 
             if var._logger_info:
                 _logger.info(f"Descargando CSV desde: {self.syscom_url_csv[:100]}...")
@@ -193,54 +188,42 @@ class SyscomConfig(models.Model):
                 if var._logger_info:
                     _logger.info(f"Syscom: Archivo previo disponible para respaldo: {previous_file}")
 
-            # actualizar la tasa de cambio con la presente en currency "base.USD"
             self.tasa_cambio = round((var._mxn_valor /
                                       self.env.ref('base.USD').rate),
                                      var._digitos_redondeo)
-            # Iniciar tiempo de descarga
             start_time = datetime.now()
             last_print_time = start_time
             last_print_size = 0
             total_size = 0
 
-            # Para mostrar en consola/registro
             def print_progress(current_size, total_size=None):
                 nonlocal last_print_time, last_print_size
 
                 current_time = datetime.now()
                 elapsed = (current_time - start_time).total_seconds()
 
-                # Calcular velocidad (bytes/segundo)
-                if elapsed > 0:
-                    speed_bps = current_size / elapsed
-                    speed_mbps = speed_bps / (1024 * 1024)
-                else:
-                    speed_mbps = 0
+                speed_mbps = (current_size / elapsed) / (1024 * 1024) if elapsed > 0 else 0
 
-                # Calcular porcentaje si tenemos tamaño total
                 if total_size:
-                    percent = (current_size / total_size) * 100
-                    progress_msg = f"{percent:.1f}%"
+                    progress_msg = f"{(current_size / total_size) * 100:.1f}%"
                 else:
-                    progress_msg = f"{current_size / (1024*1024):.2f} MB"
+                    progress_msg = f"{current_size / (1024 * 1024):.2f} MB"
 
-                # Imprimir cada MB o cada 5 segundos
                 should_print = (
-                    (current_size - last_print_size) >= (1024 * 1024) or  # Cada MB
-                    (current_time - last_print_time).total_seconds() >= var._periodo_actualizaciones
+                    (current_size - last_print_size) >= (1024 * 1024)
+                    or (current_time - last_print_time).total_seconds() >= var._periodo_actualizaciones
                 )
 
                 if should_print:
                     if var._logger_info:
                         _logger.info(
-                        f"Descargando: {progress_msg} | "
-                        f"Velocidad: {speed_mbps:.2f} MB/s | "
-                        f"Tiempo: {elapsed:.0f}s"
-                    )
+                            f"Descargando: {progress_msg} | "
+                            f"Velocidad: {speed_mbps:.2f} MB/s | "
+                            f"Tiempo: {elapsed:.0f}s"
+                        )
                     last_print_time = current_time
                     last_print_size = current_size
 
-            # Descargar con stream
             response = requests.get(
                 self.syscom_url_csv,
                 headers=headers,
@@ -251,10 +234,7 @@ class SyscomConfig(models.Model):
 
             response.raise_for_status()
 
-            # obtener el tipo de contenido
             content_type = response.headers.get('Content-Type', '')
-
-            # Obtener tamaño total si está disponible
             total_size = int(response.headers.get('content-length', 0))
 
             if total_size:
@@ -269,7 +249,6 @@ class SyscomConfig(models.Model):
                     return previous_file
                 return "NoCSV"
 
-            # Crear directorio
             download_dir = var._ruta_descarga
             os.makedirs(download_dir, exist_ok=True)
 
@@ -277,39 +256,36 @@ class SyscomConfig(models.Model):
             filename = f'{var._archivo_csv_prefijo}{timestamp}{var._archivo_csv_extension}'
             file_path = os.path.join(download_dir, filename)
 
-            # Descargar por chunks con progreso
             downloaded = 0
-            chunk_size = 8192  # 8KB chunks
+            chunk_size = 8192  # 8 KB por chunk
 
             if var._logger_info:
-                _logger.info("🚀 Iniciando descarga...")
+                _logger.info("Iniciando descarga...")
 
             with open(file_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
-                        # Mostrar progreso
                         print_progress(downloaded, total_size)
 
-            # Mensaje final
             end_time = datetime.now()
             total_elapsed = (end_time - start_time).total_seconds()
             avg_speed = downloaded / total_elapsed if total_elapsed > 0 else 0
 
             if var._logger_info:
-                _logger.info(f"""
-            DESCARGA COMPLETADA:
-            - Archivo: {filename}
-            - Tamaño: {downloaded / (1024*1024):.2f} MB
-            - Tiempo total: {total_elapsed:.1f} segundos
-            - Velocidad promedio: {avg_speed / (1024*1024):.2f} MB/s
-            - Ruta: {file_path}
-            """)
-            if var._logger_info:
-                _logger.info("Syscom: Registro en bitacora.")
+                _logger.info(
+                    "DESCARGA COMPLETADA — "
+                    "Archivo: %s | Tamaño: %.2f MB | "
+                    "Tiempo: %.1f s | Velocidad: %.2f MB/s | Ruta: %s",
+                    filename,
+                    downloaded / (1024 * 1024),
+                    total_elapsed,
+                    avg_speed / (1024 * 1024),
+                    file_path,
+                )
 
-            # Registrar en bitácora
+
             file_size = os.path.getsize(file_path)
             resultado = self.env['syscom.log'].create({
                 'fecha_descarga': fields.Datetime.now(),
@@ -351,16 +327,18 @@ class SyscomConfig(models.Model):
         try:
             download_dir = var._ruta_descarga
             if var._logger_info:
-                _logger.info(f'Limpiando archivos antiguos en el directorio de descargas...')
+                _logger.info('Limpiando archivos antiguos en el directorio de descargas...')
             for nombre_archivo in os.listdir(download_dir):
                 ruta_archivo = os.path.join(download_dir, nombre_archivo)
                 ruta_bak = ruta_archivo + "_bak"
                 if ruta_archivo == archivo_actual or \
                    ruta_bak == archivo_actual:
                     continue
-                # Solo eliminar archivos que coincidan con el patrón de descargas de syscom
-                if nombre_archivo.startswith('syscom_products_') and nombre_archivo.endswith('.csv') or \
-                   nombre_archivo.startswith('syscom_products_') and nombre_archivo.endswith('.csv_bak'):
+                es_csv_syscom = (
+                    nombre_archivo.startswith('syscom_products_')
+                    and (nombre_archivo.endswith('.csv') or nombre_archivo.endswith('.csv_bak'))
+                )
+                if es_csv_syscom:
                     try:
                         os.remove(ruta_archivo)
                         if var._logger_info:
@@ -450,15 +428,37 @@ class SyscomConfig(models.Model):
                                tipo_operacion='Proveedor Existente')
 
         try:
-            datos_syscom_product, datos_syscom_proveedor, tipo_cambio_csv, codigos_procesados = self._leer_csv(ruta_archivo_csv, categorias_filtro, datos_proveedor.id)
-            d_productos_actualizar, l_productos_crear_vals, productos_procesados = self._clasificar_syscom_product(datos_syscom_product, codigos_procesados)
-            d_prod_syscom_actualizar, l_prod_syscom_crear_vals, prod_syscom_procesados = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesados)
+            (
+                datos_syscom_product,
+                datos_syscom_proveedor,
+                tipo_cambio_csv,
+                codigos_procesados,
+            ) = self._leer_csv(ruta_archivo_csv, categorias_filtro, datos_proveedor.id)
+
+            (
+                d_productos_actualizar,
+                l_productos_crear_vals,
+                productos_procesados,
+            ) = self._clasificar_syscom_product(datos_syscom_product, codigos_procesados)
+
+            (
+                d_prod_syscom_actualizar,
+                l_prod_syscom_crear_vals,
+                prod_syscom_procesados,
+            ) = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesados)
+
             productos_actualizados = self._procesar_batch_actualizacion(d_productos_actualizar)
             productos_creados = self._procesar_batch_creacion(l_productos_crear_vals)
             provider_actualizados = self._procesar_batch_actualizacion_syscom_provider(d_prod_syscom_actualizar)
             provider_creados = self._procesar_batch_creacion_syscom_provider(l_prod_syscom_crear_vals)
-            productos_registrados = self._procesar_info_proveedor(l_productos_crear_vals, d_productos_actualizar, datos_proveedor)
-            self._registrar_log_importacion(ruta_archivo_csv, tipo_cambio_csv, productos_procesados, productos_creados, productos_actualizados)
+
+            productos_registrados = self._procesar_info_proveedor(
+                l_productos_crear_vals, d_productos_actualizar, datos_proveedor
+            )
+            self._registrar_log_importacion(
+                ruta_archivo_csv, tipo_cambio_csv,
+                productos_procesados, productos_creados, productos_actualizados,
+            )
         except Exception as e:
             _logger.error(f'Error procesando CSV: {str(e)}')
             raise UserError(f'Error al procesar el archivo CSV: {str(e)}')
@@ -564,7 +564,6 @@ class SyscomConfig(models.Model):
         except Exception:
             return None
 
-    # Funcion para agregar la marca de los productos importados, usando el modulo de OCA product_brand, si esta instalado. Si no, se puede omitir o implementar de otra forma.
     def _set_or_create_brand(self, nombre_marca, marca_cache=None) -> int:
         """Busca o crea una marca en el modelo product.brand.
           y devuelve su ID.
@@ -736,7 +735,7 @@ class SyscomConfig(models.Model):
                 len(l_productos_crear_vals), omitidos)
         return d_productos_actualizar, l_productos_crear_vals, productos_procesados
 
-    def _procesar_batch_actualizacion(self, productos_actualizar)-> int:
+    def _procesar_batch_actualizacion(self, productos_actualizar) -> int:
         """Procesa la actualización de productos existentes en batch.
         Args:
             productos_actualizar (dict): Diccionario con los IDs de producto y los valores a actualizar.
@@ -749,8 +748,6 @@ class SyscomConfig(models.Model):
         if productos_actualizar:
             if var._logger_info:
                 _logger.info(f'Actualizando {len(productos_actualizar)} productos en batch...')
-            # agregar un contador del porcentaje de actualización cada 100
-            # registros procesados o cada 5 segundos, lo que ocurra primero
             total = len(productos_actualizar)
             count = 0
             for product_id, values in productos_actualizar.items():
@@ -770,7 +767,7 @@ class SyscomConfig(models.Model):
             productos_actualizados = len(productos_actualizar)
         return productos_actualizados
 
-    def _procesar_batch_actualizacion_syscom_provider(self, productos_actualizar)-> int:
+    def _procesar_batch_actualizacion_syscom_provider(self, productos_actualizar) -> int:
         """Procesa la actualización de registros de proveedor syscom en batch.
         Args:
             productos_actualizar (dict): Diccionario con los IDs de registro y los valores a actualizar.
@@ -793,7 +790,7 @@ class SyscomConfig(models.Model):
             productos_actualizados = len(productos_actualizar)
         return productos_actualizados
 
-    def _procesar_batch_creacion(self, productos_crear_vals)-> int:
+    def _procesar_batch_creacion(self, productos_crear_vals) -> int:
         """Procesa la creación de nuevos productos en batch.
         Args:
             productos_crear_vals (list): Lista de diccionarios con los valores para crear nuevos productos.
@@ -844,7 +841,7 @@ class SyscomConfig(models.Model):
                 _logger.exception('No se pudo asignar impuestos en batch a los productos creados: %s', e)
         return productos_creados
 
-    def _procesar_batch_creacion_syscom_provider(self, productos_crear_vals)-> int:
+    def _procesar_batch_creacion_syscom_provider(self, productos_crear_vals) -> int:
         """Procesa la creación de nuevos registros de proveedor syscom en batch.
         Args:
             productos_crear_vals (list): Lista de diccionarios con los valores para crear nuevos registros de proveedor syscom.
@@ -879,8 +876,6 @@ class SyscomConfig(models.Model):
                                 _logger.info(f'Valores del registro de proveedor syscom con error: {vals}')
         return productos_creados
 
-    # metodo para registrar una entrada al log recibiendo solo una descripcion y tipo de operacion,
-    # usando datos adicionales como la fecha actual, url de syscom y categorias importadas desde la configuración actual
     def _registrar_log(self, descripcion='Falta descripcion', tipo_operacion='Operacion no especificada'):
         try:
             self.env['syscom.log'].create({

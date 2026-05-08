@@ -1,4 +1,5 @@
 from pathlib import Path
+from .syscom_parametros import SyscomParametros as Parametros
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -60,7 +61,6 @@ def normaliza_csv(ruta_de_entrada: str, ruta_de_salida: str) -> None:
 
             file_out.write(line)
 
-    from .syscom_parametros import SyscomParametros as Parametros
     var = Parametros()
     if var._logger_info:
         _logger.info(f"\nArchivo normalizado: {ruta_de_salida}")

@@ -1,7 +1,5 @@
-# ===========================
-# models/syscom_log.py
-# ===========================
 from odoo import models, fields, api
+from .syscom_parametros import SyscomParametros as Parametros
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -46,9 +44,7 @@ class SyscomLog(models.Model):
 
     @api.model
     def create(self, vals):
-        """Override create to log creation of SyscomLog entries."""
         record = super(SyscomLog, self).create(vals)
-        from .syscom_parametros import SyscomParametros as Parametros
         var = Parametros()
         if var._logger_info:
             _logger.info(f"SyscomLog llamada a created: {record.id} con fecha {record.fecha_descarga}")
