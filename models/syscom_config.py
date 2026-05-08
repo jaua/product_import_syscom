@@ -13,8 +13,18 @@ import os
 import logging
 import shutil
 
-var = Parametros()  # Instancia de la clase para acceder a sus variables
+var = Parametros()
 _logger = logging.getLogger(__name__)
+
+
+class _FuncNameFilter(logging.Filter):
+    def filter(self, record):
+        if var._logger_funcname:
+            record.msg = f'[{record.funcName}] {record.msg}'
+        return True
+
+
+_logger.addFilter(_FuncNameFilter())
 
 
 
@@ -469,7 +479,7 @@ class SyscomConfig(models.Model):
             tuple: Una tupla con las filas de datos, el tipo de cambio y los códigos a procesar.
         """
         datos_syscom_product = []
-        datos_syscom_proveedor = []
+        datos_syscom_provider = []
         tipo_cambio_csv = None
         codigos_procesados = []
         marca_cache = {}  # Cache para marcas ya procesadas
@@ -523,7 +533,7 @@ class SyscomConfig(models.Model):
                     'syscom_url_imagen': syscom_url_imagen,
                     'product_brand_id': marca_id,
                 })
-                datos_syscom_proveedor.append({
+                datos_syscom_provider.append({
                     'default_code': default_code,
                     'partner_id': syscom_provider_id,
                     'product_tmpl_id': None,  # Se asignará después de crear/actualizar el producto
@@ -538,7 +548,7 @@ class SyscomConfig(models.Model):
         if var._logger_info:
             _logger.info(f'CSV procesado completamente. Total filas procesadas: {len(datos_syscom_product)}')
 
-        return datos_syscom_product, datos_syscom_proveedor, tipo_cambio_csv, codigos_procesados
+        return datos_syscom_product, datos_syscom_provider, tipo_cambio_csv, codigos_procesados
 
     def _calcular_precios(self, su_precio, tipo_cambio_csv) -> tuple:
         """Calcula el precio estándar y el precio de venta.

@@ -17,6 +17,7 @@ class SyscomParametros():
     _sin_marca_nombre = "S/M"
     _logger_info = True
     _logger_debug = False
+    _logger_funcname = True  # prefija [nombre_funcion] en cada mensaje de log
     _mostrar_progreso = True
     _progreso_intervalo = 10
     _actualizar_precios = True
