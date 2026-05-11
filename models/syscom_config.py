@@ -459,7 +459,9 @@ class SyscomConfig(models.Model):
                 productos_procesados,
             ) = self._clasificar_syscom_product(datos_syscom_product, codigos_procesados)
 
-            productos_actualizados = self._actualizar_productos_individual(d_productos_actualizar)
+            #productos_actualizados = self._actualizar_productos_individual(d_productos_actualizar)
+            productos_actualizados = self._actualizar_productos_sql_batch(d_productos_actualizar)
+
             productos_creados = self._procesar_batch_creacion(l_productos_crear_vals)
 
             (
@@ -468,9 +470,7 @@ class SyscomConfig(models.Model):
                 prod_syscom_procesados,
             ) = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesados)
 
-            #provider_actualizados = self._actualizar_syscom_provider_individual(d_prod_syscom_actualizar)
-            provider_actualizados = self._actualizar_productos_sql_batch(d_prod_syscom_actualizar)
-
+            provider_actualizados = self._actualizar_syscom_provider_individual(d_prod_syscom_actualizar)
             provider_creados = self._procesar_batch_creacion_syscom_provider(l_prod_syscom_crear_vals)
 
             productos_registrados = self._procesar_info_proveedor(
@@ -833,36 +833,52 @@ class SyscomConfig(models.Model):
         Returns:
             int: El número de productos actualizados.
         """
+        if not productos_actualizar:
+            return 0
+
+        total = len(productos_actualizar)
+        inicio = datetime.now()
+
+        def _elapsed():
+            return (datetime.now() - inicio).total_seconds()
+
         if var._logger_info:
-            _logger.info('Iniciando actualización individual de productos existentes...')
-        productos_actualizados = 0
-        if productos_actualizar:
-            if var._logger_info:
-                _logger.info(f'Actualizando {len(productos_actualizar)} productos individualmente...')
-            total = len(productos_actualizar)
-            count = 0
-            for product_id, values in productos_actualizar.items():
-                self.env['product.template'].browse(product_id).write(values)
-                count += 1
-                if count % var._registros_por_batch == 0 or count == total:
-                    porcentaje = (count / total * 100) if total > 0 else 0
-                    if var._logger_info:
-                        _logger.info(f'Progreso de actualización: {porcentaje:.2f}% ({count}/{total})')
-                if not var._usar_bitacora_precios:
-                    continue
-                try:
-                    # product = self.env['product.template'].browse(product_id)
-                    registrar_bitacora_precios(f"Producto actualizado: {values['default_code']} - Nuevo precio: {values.get('list_price', 'N/A')}")
-                except Exception as e:
-                    _logger.error(f'Error al registrar bitácora de producto actualizado: {e}')
-            productos_actualizados = len(productos_actualizar)
-        return productos_actualizados
+            _logger.info('productos_individual — inicio total=%d', total)
+
+        count = 0
+        for product_id, values in productos_actualizar.items():
+            self.env['product.template'].browse(product_id).write(values)
+            count += 1
+            if var._logger_info and (count % var._registros_por_batch == 0 or count == total):
+                _logger.info(
+                    'productos_individual pct=%.1f%% registros=%d/%d elapsed=%.1fs',
+                    count / total * 100, count, total, _elapsed(),
+                )
+            if not var._usar_bitacora_precios:
+                continue
+            try:
+                registrar_bitacora_precios(
+                    f"Producto actualizado: {values['default_code']} - Nuevo precio: {values.get('list_price', 'N/A')}"
+                )
+            except Exception as e:
+                _logger.error(f'Error al registrar bitácora de producto actualizado: {e}')
+
+        if var._logger_info:
+            _logger.info(
+                'productos_individual — completado total=%d elapsed=%.1fs',
+                total, _elapsed(),
+            )
+        return total
 
     def _actualizar_productos_sql_batch(self, productos_actualizar) -> int:
-        """Actualiza productos existentes usando SQL batch para campos directos en product.template.
-        standard_price se escribe via ORM para preservar el historial de precios (product.price.history).
+        """Actualiza productos existentes usando SQL batch para campos numéricos/char directos.
+
+        Campos via SQL (no traducibles, no JSONB): list_price, product_url_ref,
+            product_url_image, product_brand_id.
+        Campos via ORM agrupado: name (JSONB traducible), standard_price (price.history).
+
         Args:
-            productos_actualizar (dict): Diccionario {product_template_id: values} con los valores a actualizar.
+            productos_actualizar (dict): Diccionario {product_template_id: values}.
         Returns:
             int: El número de productos actualizados.
         Notes:
@@ -872,50 +888,96 @@ class SyscomConfig(models.Model):
         if not productos_actualizar:
             return 0
 
-        if var._logger_info:
-            _logger.info('Actualizando %d productos via SQL batch...', len(productos_actualizar))
+        total = len(productos_actualizar)
+        chunk_size = var._registros_por_batch
+        inicio = datetime.now()
 
-        # Campos directos en product_template (no standard_price)
-        rows_template = [
-            (
-                vals['name'],
-                vals['list_price'],
-                vals.get('product_url_ref'),
-                vals.get('product_url_image'),
-                vals.get('product_brand_id'),
-                product_id,
+        def _elapsed():
+            return (datetime.now() - inicio).total_seconds()
+
+        if var._logger_info:
+            _logger.info('sql_batch — inicio total=%d chunk_size=%d', total, chunk_size)
+
+        try:
+            # Fase 1: SQL batch en chunks — campos varchar/numeric directos en product_template
+            rows_template = [
+                (
+                    vals['list_price'],
+                    vals.get('product_url_ref'),
+                    vals.get('product_url_image'),
+                    vals.get('product_brand_id'),
+                    product_id,
+                )
+                for product_id, vals in productos_actualizar.items()
+            ]
+            sql = """UPDATE product_template
+                        SET list_price=%s, product_url_ref=%s,
+                            product_url_image=%s, product_brand_id=%s
+                      WHERE id=%s"""
+            procesados_sql = 0
+            for i in range(0, total, chunk_size):
+                chunk = rows_template[i:i + chunk_size]
+                self.env.cr.executemany(sql, chunk)
+                procesados_sql += len(chunk)
+                if var._logger_info:
+                    _logger.info(
+                        'sql_batch fase=SQL pct=%.1f%% registros=%d/%d elapsed=%.1fs',
+                        procesados_sql / total * 100, procesados_sql, total, _elapsed(),
+                    )
+
+            # Fase 2: name — JSONB traducible, via ORM agrupado por valor
+            grupos_nombre = {}
+            for product_id, vals in productos_actualizar.items():
+                nombre = vals.get('name')
+                if nombre is not None:
+                    grupos_nombre.setdefault(nombre, []).append(product_id)
+            procesados_name = 0
+            for nombre, ids in grupos_nombre.items():
+                self.env['product.template'].browse(ids).write({'name': nombre})
+                procesados_name += len(ids)
+                if var._logger_info and (procesados_name % chunk_size == 0 or procesados_name == total):
+                    _logger.info(
+                        'sql_batch fase=name pct=%.1f%% registros=%d/%d elapsed=%.1fs',
+                        procesados_name / total * 100, procesados_name, total, _elapsed(),
+                    )
+
+            # Fase 3: standard_price — via ORM para mantener product.price.history
+            grupos_precio = {}
+            for product_id, vals in productos_actualizar.items():
+                precio = vals.get('standard_price')
+                if precio is not None:
+                    grupos_precio.setdefault(precio, []).append(product_id)
+            procesados_precio = 0
+            for precio, ids in grupos_precio.items():
+                self.env['product.template'].browse(ids).write({'standard_price': precio})
+                procesados_precio += len(ids)
+                if var._logger_info and (procesados_precio % chunk_size == 0 or procesados_precio == total):
+                    _logger.info(
+                        'sql_batch fase=standard_price pct=%.1f%% registros=%d/%d elapsed=%.1fs',
+                        procesados_precio / total * 100, procesados_precio, total, _elapsed(),
+                    )
+
+            # Invalidar caché del ORM
+            ids = list(productos_actualizar.keys())
+            self.env['product.template'].browse(ids).invalidate_recordset([
+                'name', 'list_price', 'standard_price',
+                'product_url_ref', 'product_url_image', 'product_brand_id',
+            ])
+
+            if var._logger_info:
+                _logger.info(
+                    'sql_batch — completado total=%d elapsed=%.1fs',
+                    total, _elapsed(),
+                )
+        except Exception as e:
+            _logger.error(
+                'sql_batch — error elapsed=%.1fs: %s', _elapsed(), e, exc_info=True,
             )
-            for product_id, vals in productos_actualizar.items()
-        ]
-        self.env.cr.executemany(
-            """UPDATE product_template
-                  SET name=%s, list_price=%s, product_url_ref=%s,
-                      product_url_image=%s, product_brand_id=%s
-                WHERE id=%s""",
-            rows_template,
-        )
+            if var._logger_info:
+                _logger.info('sql_batch — fallback a actualización individual')
+            return self._actualizar_productos_individual(productos_actualizar)
 
-        # standard_price via ORM para mantener product.price.history
-        # Agrupamos por valor para minimizar llamadas a write()
-        grupos_precio = {}
-        for product_id, vals in productos_actualizar.items():
-            precio = vals.get('standard_price')
-            if precio is not None:
-                grupos_precio.setdefault(precio, []).append(product_id)
-        for precio, ids in grupos_precio.items():
-            self.env['product.template'].browse(ids).write({'standard_price': precio})
-
-        # Invalidar caché del ORM
-        ids = list(productos_actualizar.keys())
-        self.env['product.template'].browse(ids).invalidate_recordset([
-            'name', 'list_price', 'standard_price',
-            'product_url_ref', 'product_url_image', 'product_brand_id',
-        ])
-
-        if var._logger_info:
-            _logger.info('SQL batch completado: %d productos actualizados.', len(productos_actualizar))
-
-        return len(productos_actualizar)
+        return total
 
     def _actualizar_syscom_provider_individual(self, productos_actualizar) -> int:
         """Actualiza registros de proveedor syscom registro por registro.
@@ -924,21 +986,34 @@ class SyscomConfig(models.Model):
         Returns:
             int: El número de registros actualizados.
         """
-        productos_actualizados = 0
-        if productos_actualizar:
-            if var._logger_info:
-                _logger.info(f'Actualizando {len(productos_actualizar)} registros de proveedor syscom individualmente...')
-            total = len(productos_actualizar)
-            count = 0
-            for record_id, values in productos_actualizar.items():
-                self.env['product.provider.syscom'].browse(record_id).write(values)
-                count += 1
-                if count % var._registros_por_batch == 0 or count == total:
-                    porcentaje = (count / total * 100) if total > 0 else 0
-                    if var._logger_info:
-                        _logger.info(f'Progreso de actualización de proveedor syscom: {porcentaje:.2f}% ({count}/{total})')
-            productos_actualizados = len(productos_actualizar)
-        return productos_actualizados
+        if not productos_actualizar:
+            return 0
+
+        total = len(productos_actualizar)
+        inicio = datetime.now()
+
+        def _elapsed():
+            return (datetime.now() - inicio).total_seconds()
+
+        if var._logger_info:
+            _logger.info('syscom_provider_individual — inicio total=%d', total)
+
+        count = 0
+        for record_id, values in productos_actualizar.items():
+            self.env['product.provider.syscom'].browse(record_id).write(values)
+            count += 1
+            if var._logger_info and (count % var._registros_por_batch == 0 or count == total):
+                _logger.info(
+                    'syscom_provider_individual pct=%.1f%% registros=%d/%d elapsed=%.1fs',
+                    count / total * 100, count, total, _elapsed(),
+                )
+
+        if var._logger_info:
+            _logger.info(
+                'syscom_provider_individual — completado total=%d elapsed=%.1fs',
+                total, _elapsed(),
+            )
+        return total
 
     def _procesar_batch_creacion(self, productos_crear_vals) -> int:
         """Procesa la creación de nuevos productos en batch.
