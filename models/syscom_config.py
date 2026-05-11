@@ -732,7 +732,15 @@ class SyscomConfig(models.Model):
                 set_productos_provider_syscom = self.env['product.provider.syscom'].search([
                     ('default_code', 'in', codigos_a_procesar)
                 ])
-                default_code_provider_syscom = {p.default_code: p for p in set_productos_provider_syscom}
+                # Fix para detectar códigos duplicados en product.provider.syscom que podrían causar problemas de clasificación
+                # debemos de cambiar la comparacion de default_code que en ocasiones puede ser duplicada en el csv,
+                # ya que puede tratarse del mismo producto pero con un producto descatlogado o modelo distinto,
+                # lo ideal sería tener un identificador único de producto en el csv para evitar esta situación, pero
+                # mientras tanto, este fix nos ayudará a identificar posibles registros problemáticos.
+                # modificamos para usar en lugar de default_code como clave, una tupla de (default_code, id_syscom)
+                # para intentar evitar falsos positivos en la detección de duplicados, aunque esto dependerá de la
+                # calidad de los datos en el csv.
+                default_code_provider_syscom = {(p.default_code, p.id_syscom): p for p in set_productos_provider_syscom}
                 lista_productos_template = self.env['product.template'].search_read(
                     [
                         ('default_code', 'in', codigos_a_procesar)
@@ -745,21 +753,20 @@ class SyscomConfig(models.Model):
                 productos_perdidos_duplicados = set_productos_provider_syscom.filtered(lambda p: p.id not in ids_en_dict)
 
                 if productos_perdidos_duplicados:
-                    mensaje = ('Se encontraron %d registros en product.provider.syscom que no se pudieron clasificar correctamente. '
-                        'Estos registros podrían ser duplicados o tener inconsistencias: %s',
-                        len(productos_perdidos_duplicados),
-                        [(p.id, p.default_code) for p in productos_perdidos_duplicados]
-                        )
-                    _logger.warning(mensaje)
+                    detalle = [(p.id, p.default_code, p.id_syscom) for p in productos_perdidos_duplicados]
+                    _logger.warning(
+                        'Se encontraron %d registros en product.provider.syscom con clave (default_code, id_syscom) duplicada: %s',
+                        len(productos_perdidos_duplicados), detalle,
+                    )
                     self._log_crear({
                         'fecha_descarga': fields.Datetime.now(),
                         'tamano_descarga': 'NA',
                         'ruta_archivo': 'NA',
                         'url_origen': 'NA',
                         'tipo_accion': 'Registros Perdidos/Duplicados',
-                        'categorias_importadas': mensaje,
+                        'categorias_importadas': str(detalle),
                         'tasa_cambio': 0.0,
-                        })
+                    })
 
                 producto_template_default_code_id_map = {p['default_code']: p['id'] for p in lista_productos_template}
                 conteo_codigos_a_procesar = len(codigos_a_procesar)
@@ -785,13 +792,15 @@ class SyscomConfig(models.Model):
 
             for ldatos in datos_syscom_proveedor:
                 default_code = ldatos['default_code']
+                id_syscom = ldatos.get('id_syscom')
+                clave = (default_code, id_syscom)
                 try:
                     syscom_inventory = int(ldatos.get('syscom_inventory') or 0)
                 except (ValueError, TypeError):
                     syscom_inventory = 0
 
-                if default_code in default_code_provider_syscom:
-                    product = default_code_provider_syscom[default_code]
+                if clave in default_code_provider_syscom:
+                    product = default_code_provider_syscom[clave]
                     d_productos_actualizar[product.id] = {
                         'syscom_inventory': syscom_inventory,
                         'syscom_url': ldatos.get('syscom_url'),
