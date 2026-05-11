@@ -457,7 +457,7 @@ class SyscomConfig(models.Model):
         try:
             filas_de_datos, tipo_cambio_csv, codigos_procesar = self._leer_csv(ruta_archivo, categorias_filtro)
             d_productos_actualizar, l_productos_crear_vals, productos_procesados = self._clasificar_productos(filas_de_datos, codigos_procesar)
-            productos_actualizados = self._procesar_batch_actualizacion(d_productos_actualizar)
+            productos_actualizados = self._actualizar_productos_individual(d_productos_actualizar)
             productos_creados = self._procesar_batch_creacion(l_productos_crear_vals)
             productos_registrados = self._procesar_info_proveedor(l_productos_crear_vals, d_productos_actualizar, datos_proveedor)
             self._registrar_log_importacion(ruta_archivo, tipo_cambio_csv, productos_procesados, productos_creados, productos_actualizados)
@@ -598,10 +598,10 @@ class SyscomConfig(models.Model):
             productos_procesados += 1
         return d_productos_actualizar, l_productos_crear_vals, productos_procesados
 
-    def _procesar_batch_actualizacion(self, productos_actualizar):
+    def _actualizar_productos_individual(self, productos_actualizar):
         productos_actualizados = 0
         if productos_actualizar:
-            _logger.info(f'Actualizando {len(productos_actualizar)} productos en batch...')
+            _logger.info(f'Actualizando {len(productos_actualizar)} productos individualmente...')
             # agregar un contador del porcentaje de actualización cada 100 registros procesados o cada 5 segundos, lo que ocurra primero
             total = len(productos_actualizar)
             count = 0

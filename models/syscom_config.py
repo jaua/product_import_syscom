@@ -96,6 +96,7 @@ class SyscomConfig(models.Model):
         try:
             if var._logger_info:
                 _logger.info('Iniciando importación manual desde Syscom')
+
             tiempo_limite_seg = self.periodo_segundos
             diferencia = 3600  # Valor inicial alto
             ruta_archivo_previo = ""
@@ -105,7 +106,8 @@ class SyscomConfig(models.Model):
                 [('tipo_accion', '=', 'Descarga CSV')],
                 limit=1,
                 order='fecha_descarga desc')
-            now = datetime.utcnow()
+
+            now = fields.Datetime.now()
             ruta_archivo_previo = last_log.ruta_archivo if last_log else ""
 
             if last_log and last_log.fecha_descarga and last_log.ruta_archivo:
@@ -177,6 +179,7 @@ class SyscomConfig(models.Model):
 
     def _descargar_csv(self):
         """Descargar el archivo CSV desde la URL configurada"""
+        previous_log = None
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -194,6 +197,7 @@ class SyscomConfig(models.Model):
             ], limit=1, order='fecha_descarga desc')
 
             previous_file = None
+
             if previous_log and previous_log.ruta_archivo and os.path.exists(previous_log.ruta_archivo):
                 previous_file = previous_log.ruta_archivo
                 if var._logger_info:
@@ -202,7 +206,8 @@ class SyscomConfig(models.Model):
             self.tasa_cambio = round((var._mxn_valor /
                                       self.env.ref('base.USD').rate),
                                      var._digitos_redondeo)
-            start_time = datetime.now()
+
+            start_time = fields.Datetime.now()
             last_print_time = start_time
             last_print_size = 0
             total_size = 0
@@ -210,7 +215,7 @@ class SyscomConfig(models.Model):
             def print_progress(current_size, total_size=None):
                 nonlocal last_print_time, last_print_size
 
-                current_time = datetime.now()
+                current_time = fields.Datetime.now()
                 elapsed = (current_time - start_time).total_seconds()
 
                 speed_mbps = (current_size / elapsed) / (1024 * 1024) if elapsed > 0 else 0
@@ -221,8 +226,8 @@ class SyscomConfig(models.Model):
                     progress_msg = f"{current_size / (1024 * 1024):.2f} MB"
 
                 should_print = (
-                    (current_size - last_print_size) >= (1024 * 1024)
-                    or (current_time - last_print_time).total_seconds() >= var._periodo_actualizaciones
+                    (current_size - last_print_size) >= (1024 * 1024) or
+                    (current_time - last_print_time).total_seconds() >= var._periodo_actualizaciones
                 )
 
                 if should_print:
@@ -281,7 +286,7 @@ class SyscomConfig(models.Model):
                         downloaded += len(chunk)
                         print_progress(downloaded, total_size)
 
-            end_time = datetime.now()
+            end_time = fields.Datetime.now()
             total_elapsed = (end_time - start_time).total_seconds()
             avg_speed = downloaded / total_elapsed if total_elapsed > 0 else 0
 
@@ -424,10 +429,12 @@ class SyscomConfig(models.Model):
 
         if not datos_proveedor:
             # Opcional: Crear el proveedor si no existe
-            datos_proveedor = self.env['res.partner'].create({
-                'name': var._proveedor_nombre,
-                'supplier_rank': 1
-            })
+            datos_proveedor = self.env['res.partner'].create(
+                [{
+                    'name': var._proveedor_nombre,
+                    'supplier_rank': 1,
+                }]
+            )
             self._registrar_log(descripcion=f"Proveedor '{var._proveedor_nombre}'"
                                f"creado con ID {datos_proveedor.id}"
                                f"para importación Syscom.",
@@ -452,7 +459,7 @@ class SyscomConfig(models.Model):
                 productos_procesados,
             ) = self._clasificar_syscom_product(datos_syscom_product, codigos_procesados)
 
-            productos_actualizados = self._procesar_batch_actualizacion(d_productos_actualizar)
+            productos_actualizados = self._actualizar_productos_individual(d_productos_actualizar)
             productos_creados = self._procesar_batch_creacion(l_productos_crear_vals)
 
             (
@@ -461,7 +468,9 @@ class SyscomConfig(models.Model):
                 prod_syscom_procesados,
             ) = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesados)
 
-            provider_actualizados = self._procesar_batch_actualizacion_syscom_provider(d_prod_syscom_actualizar)
+            #provider_actualizados = self._actualizar_syscom_provider_individual(d_prod_syscom_actualizar)
+            provider_actualizados = self._actualizar_productos_sql_batch(d_prod_syscom_actualizar)
+
             provider_creados = self._procesar_batch_creacion_syscom_provider(l_prod_syscom_crear_vals)
 
             productos_registrados = self._procesar_info_proveedor(
@@ -582,6 +591,7 @@ class SyscomConfig(models.Model):
             tuple: Una tupla con el precio estándar y el precio de
               venta.
         """
+        resultado = None
         try:
             price_raw = float(su_precio.replace(',', ''))
             actual_tasa_cambio = getattr(self, 'tasa_cambio', var._mxn_valor)
@@ -591,9 +601,11 @@ class SyscomConfig(models.Model):
             else:
                 standard_price = round(price_raw, 2)
             list_price = round(standard_price * (1 + (self.ganancia_porcentaje / 100)), 2)
-            return standard_price, list_price
+            resultado = (standard_price, list_price)
+            return resultado
         except Exception:
-            return None
+            resultado = (None, None)
+            return resultado
 
     def _set_or_create_brand(self, nombre_marca, marca_cache=None) -> int:
         """Busca o crea una marca en el modelo product.brand.
@@ -605,7 +617,7 @@ class SyscomConfig(models.Model):
             int: El ID de la marca encontrada o creada."""
         if marca_cache is None:
             marca_cache = {}
-        marca_id = None
+        marca_id = False
         if "product.brand" in self.env.registry:
             if nombre_marca in marca_cache:
                 marca_id = marca_cache[nombre_marca]
@@ -615,9 +627,9 @@ class SyscomConfig(models.Model):
                     [('name', '=', nombre_marca)],
                     limit=1)
             if not marca_id:
-                marca_id = self.env['product.brand'].create({
+                marca_id = self.env['product.brand'].create([{
                     'name': nombre_marca,
-                })
+                }])
 
             marca_id = marca_id.id
             marca_cache[nombre_marca] = marca_id
@@ -700,28 +712,76 @@ class SyscomConfig(models.Model):
         if datos_syscom_proveedor is None:
             datos_syscom_proveedor = []
 
+        if codigos_a_procesar is None:
+            codigos_a_procesar = []
+
         if var._logger_info:
             _logger.info('Clasificando productos de proveedor syscom...')
 
         d_productos_actualizar = {}
         l_productos_crear_vals = []
-        productos_procesados = 0
-        omitidos = 0
-        productos_existentes = {}
-        producto_id_map = {}
+        default_code_provider_syscom = {}
+        producto_template_default_code_id_map = {}
+        contador_productos_procesados = 0
+        contador_omitidos = 0
+        productos_perdidos_duplicados = None
+
 
         try:
             if datos_syscom_proveedor:
-                productos_provider = self.env['product.provider.syscom'].search([
+                set_productos_provider_syscom = self.env['product.provider.syscom'].search([
                     ('default_code', 'in', codigos_a_procesar)
                 ])
+                default_code_provider_syscom = {p.default_code: p for p in set_productos_provider_syscom}
+                lista_productos_template = self.env['product.template'].search_read(
+                    [
+                        ('default_code', 'in', codigos_a_procesar)
+                    ],
+                    ['default_code',
+                     'id'
+                    ]
+                )
+                ids_en_dict ={p.id for p in default_code_provider_syscom.values()}
+                productos_perdidos_duplicados = set_productos_provider_syscom.filtered(lambda p: p.id not in ids_en_dict)
+
+                if productos_perdidos_duplicados:
+                    mensaje = ('Se encontraron %d registros en product.provider.syscom que no se pudieron clasificar correctamente. '
+                        'Estos registros podrían ser duplicados o tener inconsistencias: %s',
+                        len(productos_perdidos_duplicados),
+                        [(p.id, p.default_code) for p in productos_perdidos_duplicados]
+                        )
+                    _logger.warning(mensaje)
+                    self._log_crear({
+                        'fecha_descarga': fields.Datetime.now(),
+                        'tamano_descarga': 'NA',
+                        'ruta_archivo': 'NA',
+                        'url_origen': 'NA',
+                        'tipo_accion': 'Registros Perdidos/Duplicados',
+                        'categorias_importadas': mensaje,
+                        'tasa_cambio': 0.0,
+                        })
+
+                producto_template_default_code_id_map = {p['default_code']: p['id'] for p in lista_productos_template}
+                conteo_codigos_a_procesar = len(codigos_a_procesar)
+                conteo_set_provider = len(set_productos_provider_syscom)
+                conteo_default_code_provider = len(default_code_provider_syscom)
+                conteo_productos_template = len(lista_productos_template)
+                conteo_datos_syscom_proveedor = len(datos_syscom_proveedor)
+                lista_productos_existentes = list(default_code_provider_syscom)[:10]
+
                 if var._logger_info:
-                    _logger.info(f'Encontrados {len(productos_provider)} registros existentes en product.provider.syscom.')
-                productos_existentes = {p.default_code: p for p in productos_provider}
-                productos_template = self.env['product.template'].search_read([
-                    ('default_code', 'in', codigos_a_procesar)
-                ], ['default_code', 'id'])
-                producto_id_map = {p['default_code']: p['id'] for p in productos_template}
+                    _logger.info(
+                        'syscom_provider — codigos=%d provider_total=%d provider_unicos=%d datos_csv=%d template=%d',
+                        conteo_codigos_a_procesar, conteo_set_provider,
+                        conteo_default_code_provider, conteo_datos_syscom_proveedor,
+                        conteo_productos_template,
+                    )
+                    _logger.info(f' productos_existentes: {lista_productos_existentes}.')
+            else:
+                if var._logger_info:
+                    mensage = 'No se proporcionaron datos de proveedor syscom para clasificar.'
+                    _logger.info(mensage)
+                    raise UserError(mensage)
 
             for ldatos in datos_syscom_proveedor:
                 default_code = ldatos['default_code']
@@ -730,20 +790,20 @@ class SyscomConfig(models.Model):
                 except (ValueError, TypeError):
                     syscom_inventory = 0
 
-                if default_code in productos_existentes:
-                    product = productos_existentes[default_code]
+                if default_code in default_code_provider_syscom:
+                    product = default_code_provider_syscom[default_code]
                     d_productos_actualizar[product.id] = {
                         'syscom_inventory': syscom_inventory,
                         'syscom_url': ldatos.get('syscom_url'),
                         'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
                     }
                 else:
-                    tmpl_id = producto_id_map.get(default_code)
+                    tmpl_id = producto_template_default_code_id_map.get(default_code)
                     if not tmpl_id:
                         _logger.warning(
                             'No se encontró product.template para default_code %s; '
                             'se omite el registro de proveedor syscom.', default_code)
-                        omitidos += 1
+                        contador_omitidos += 1
                         continue
                     l_productos_crear_vals.append({
                         'default_code': default_code,
@@ -754,7 +814,7 @@ class SyscomConfig(models.Model):
                         'syscom_url': ldatos.get('syscom_url'),
                         'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
                     })
-                productos_procesados += 1
+                contador_productos_procesados += 1
         except Exception as e:
             _logger.error(f'Error al clasificar datos de proveedor Syscom: {e}', exc_info=True)
 
@@ -762,23 +822,23 @@ class SyscomConfig(models.Model):
             _logger.info(
                 'Clasificación syscom_provider completada: %d procesados, '
                 '%d a actualizar, %d a crear, %d omitidos.',
-                productos_procesados, len(d_productos_actualizar),
-                len(l_productos_crear_vals), omitidos)
-        return d_productos_actualizar, l_productos_crear_vals, productos_procesados
+                contador_productos_procesados, len(d_productos_actualizar),
+                len(l_productos_crear_vals), contador_omitidos)
+        return d_productos_actualizar, l_productos_crear_vals, contador_productos_procesados
 
-    def _procesar_batch_actualizacion(self, productos_actualizar) -> int:
-        """Procesa la actualización de productos existentes en batch.
+    def _actualizar_productos_individual(self, productos_actualizar) -> int:
+        """Actualiza productos existentes registro por registro.
         Args:
             productos_actualizar (dict): Diccionario con los IDs de producto y los valores a actualizar.
         Returns:
             int: El número de productos actualizados.
         """
         if var._logger_info:
-            _logger.info('Iniciando actualización en batch de productos existentes...')
+            _logger.info('Iniciando actualización individual de productos existentes...')
         productos_actualizados = 0
         if productos_actualizar:
             if var._logger_info:
-                _logger.info(f'Actualizando {len(productos_actualizar)} productos en batch...')
+                _logger.info(f'Actualizando {len(productos_actualizar)} productos individualmente...')
             total = len(productos_actualizar)
             count = 0
             for product_id, values in productos_actualizar.items():
@@ -798,8 +858,67 @@ class SyscomConfig(models.Model):
             productos_actualizados = len(productos_actualizar)
         return productos_actualizados
 
-    def _procesar_batch_actualizacion_syscom_provider(self, productos_actualizar) -> int:
-        """Procesa la actualización de registros de proveedor syscom en batch.
+    def _actualizar_productos_sql_batch(self, productos_actualizar) -> int:
+        """Actualiza productos existentes usando SQL batch para campos directos en product.template.
+        standard_price se escribe via ORM para preservar el historial de precios (product.price.history).
+        Args:
+            productos_actualizar (dict): Diccionario {product_template_id: values} con los valores a actualizar.
+        Returns:
+            int: El número de productos actualizados.
+        Notes:
+            - No soporta multi-variante: standard_price se actualiza en product.product por product_tmpl_id.
+            - Pendiente migrar a multi-variante cuando se implemente.
+        """
+        if not productos_actualizar:
+            return 0
+
+        if var._logger_info:
+            _logger.info('Actualizando %d productos via SQL batch...', len(productos_actualizar))
+
+        # Campos directos en product_template (no standard_price)
+        rows_template = [
+            (
+                vals['name'],
+                vals['list_price'],
+                vals.get('product_url_ref'),
+                vals.get('product_url_image'),
+                vals.get('product_brand_id'),
+                product_id,
+            )
+            for product_id, vals in productos_actualizar.items()
+        ]
+        self.env.cr.executemany(
+            """UPDATE product_template
+                  SET name=%s, list_price=%s, product_url_ref=%s,
+                      product_url_image=%s, product_brand_id=%s
+                WHERE id=%s""",
+            rows_template,
+        )
+
+        # standard_price via ORM para mantener product.price.history
+        # Agrupamos por valor para minimizar llamadas a write()
+        grupos_precio = {}
+        for product_id, vals in productos_actualizar.items():
+            precio = vals.get('standard_price')
+            if precio is not None:
+                grupos_precio.setdefault(precio, []).append(product_id)
+        for precio, ids in grupos_precio.items():
+            self.env['product.template'].browse(ids).write({'standard_price': precio})
+
+        # Invalidar caché del ORM
+        ids = list(productos_actualizar.keys())
+        self.env['product.template'].browse(ids).invalidate_recordset([
+            'name', 'list_price', 'standard_price',
+            'product_url_ref', 'product_url_image', 'product_brand_id',
+        ])
+
+        if var._logger_info:
+            _logger.info('SQL batch completado: %d productos actualizados.', len(productos_actualizar))
+
+        return len(productos_actualizar)
+
+    def _actualizar_syscom_provider_individual(self, productos_actualizar) -> int:
+        """Actualiza registros de proveedor syscom registro por registro.
         Args:
             productos_actualizar (dict): Diccionario con los IDs de registro y los valores a actualizar.
         Returns:
@@ -808,7 +927,7 @@ class SyscomConfig(models.Model):
         productos_actualizados = 0
         if productos_actualizar:
             if var._logger_info:
-                _logger.info(f'Actualizando {len(productos_actualizar)} registros de proveedor syscom en batch...')
+                _logger.info(f'Actualizando {len(productos_actualizar)} registros de proveedor syscom individualmente...')
             total = len(productos_actualizar)
             count = 0
             for record_id, values in productos_actualizar.items():
@@ -881,32 +1000,35 @@ class SyscomConfig(models.Model):
         """
         if var._logger_info:
             _logger.info('Iniciando creación en batch de nuevos registros de proveedor syscom...')
+
         productos_creados = 0
         if productos_crear_vals:
             batch_size = var._registros_por_batch
+
             if var._logger_info:
                 _logger.info(f'Creando {len(productos_crear_vals)} registros de proveedor syscom en batches de {batch_size}...')
-            for i in range(0, len(productos_crear_vals), batch_size):
-                chunk = productos_crear_vals[i:i+batch_size]
+
+            for elemento in range(0, len(productos_crear_vals), batch_size):
+                chunk = productos_crear_vals[elemento:elemento+batch_size]
                 try:
                     with self.env.cr.savepoint():
                         created_chunk = self.env['product.provider.syscom'].create(chunk)
                         productos_creados += len(created_chunk)
-                except Exception as e:
-                    _logger.error(f'Error creando batch de proveedor syscom (offset {i}): {e}', exc_info=True)
-                    for vals in chunk:
+                except Exception as excepcion_error:
+                    _logger.error(f'Error creando batch de proveedor syscom (offset {elemento}): {excepcion_error}', exc_info=True)
+                    for valores in chunk:
                         try:
                             with self.env.cr.savepoint():
-                                self.env['product.provider.syscom'].create(vals)
+                                self.env['product.provider.syscom'].create(valores)
                                 productos_creados += 1
                         except UniqueViolation:
                             _logger.warning(
                                 'Duplicado omitido — id_syscom=%s partner_id=%s ya existe.',
-                                vals.get('id_syscom'), vals.get('partner_id'),
+                                valores.get('id_syscom'), valores.get('partner_id'),
                             )
                         except Exception as e_individual:
                             _logger.error(
-                                f'Error creando proveedor syscom para {vals.get("default_code", "N/A")}: {e_individual}',
+                                f'Error creando elemento product.product.syscom con default_code =  {valores.get("default_code", "N/A")}:  {e_individual}',
                                 exc_info=True,
                             )
         return productos_creados
@@ -994,6 +1116,7 @@ class SyscomConfig(models.Model):
         return registros_procesados
 
     def _registrar_log_importacion(self, filepath, tipo_cambio_csv, productos_procesados, productos_creados, productos_actualizados):
+        """Registra un log detallado de la importación, incluyendo estadísticas y la tasa de cambio utilizada."""
         if var._logger_info:
             _logger.info(f'Importación completada: {productos_procesados} procesados, '
                          f'{productos_creados} creados, {productos_actualizados} actualizados')
