@@ -1,5 +1,4 @@
-from odoo import models, fields, api
-from .syscom_parametros import SyscomParametros as Parametros
+from odoo import models, fields
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -42,10 +41,5 @@ class SyscomLog(models.Model):
         default='Descarga CSV'
     )
 
-    @api.model
-    def create(self, vals):
-        record = super(SyscomLog, self).create(vals)
-        var = Parametros()
-        if var._logger_info:
-            _logger.info(f"SyscomLog llamada a created: {record.id} con fecha {record.fecha_descarga}")
-        return record
+    # BUG-33: override de create eliminado — solo instanciaba Parametros() en cada
+    # registro para emitir un log. El log ya existe en _log_crear (syscom_config.py).

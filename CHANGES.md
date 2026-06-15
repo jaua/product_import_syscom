@@ -1,5 +1,35 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-06-15 (revisión 5 — bugs y rendimiento)
+
+### Bugs corregidos
+
+| #  | Archivo | Descripción | Gravedad |
+|----|---------|-------------|----------|
+| 29 | `models/syscom_config.py` | `_calcular_precios`: en error retornaba `(None, None)` (tupla truthy) → `if not precios:` nunca lo detectaba; cambiado a retornar `None` para que el guard funcione | Alta |
+| 30 | `models/syscom_config.py` | `_clasificar_syscom_provider`: `raise UserError` estaba dentro de `if var._logger_info:` — el error solo se lanzaba con logging activo; movido fuera del bloque | Alta |
+| 31 | `models/syscom_config.py` | `_limpiar_archivos_antiguos`: condición `ruta_bak == archivo_actual` nunca protegía el respaldo (evaluaba si el archivo actual era un `_bak`, no a la inversa); corregida a `ruta_archivo == archivo_actual + "_bak"` | Media |
+| 32 | `models/syscom_config.py` | `var._eliminar_archivo_previo` se escribía sobre la instancia de módulo compartida entre workers de Odoo (race condition); asignaciones eliminadas ya que la bandera nunca se leía para tomar decisiones | Media |
+| 33 | `models/syscom_log.py` | Override de `create` eliminado: instanciaba `Parametros()` en cada registro solo para emitir un log que ya existe en `_log_crear`; eliminados también imports de `api` y `Parametros` que quedaron huérfanos | Baja |
+
+### Mejoras de rendimiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 34 | `models/syscom_config.py` | `_clasificar_syscom_provider`: `search([])` reemplazado por búsqueda filtrada por `codigos_a_procesar`; evita cargar toda la tabla en cada importación |
+| 35 | `models/syscom_config.py` | Nuevo método `_actualizar_syscom_provider_sql_batch`: actualiza `product.provider.syscom` vía `executemany` SQL con fallback al método individual; también escribe `last_update` |
+| 36 | `models/syscom_config.py` | `_procesar_csv` ahora usa `_actualizar_syscom_provider_sql_batch` en lugar de `_actualizar_syscom_provider_individual` |
+
+### Mejoras menores
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 37 | `models/syscom_config.py` | `mantener_respaldo` en `_csv_limpiar` ahora condiciona la creación del archivo `_bak`; antes siempre se creaba ignorando el parámetro |
+| 38 | `models/syscom_config.py` | `categ_id` incluido en la actualización de productos existentes para mantener la categoría sincronizada con Syscom en cada importación |
+| 39 | `models/syscom_config.py` | Typo `mensage` → `mensaje` en `_clasificar_syscom_provider` |
+
+---
+
 ## [Pendiente de versión] — 2026-05-06 (revisión 4 — antipatrones)
 
 ### Antipatrones corregidos

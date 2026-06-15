@@ -139,19 +139,19 @@ class SyscomConfig(models.Model):
                     _logger.info("Syscom: Reutiliza archivo descargado previamente: %s",
                                  ruta_archivo_previo)
                 archivo_ruta = ruta_archivo_previo
-                var._eliminar_archivo_previo = False
             else:
                 # Proceder con la descarga normal
                 if var._logger_info:
                     _logger.info("Syscom: Iniciando nueva descarga del archivo CSV...")
                 archivo_ruta = self._descargar_csv()
-                var._eliminar_archivo_previo = True
                 if var._logger_info:
                     _logger.info("Syscom: Archivo descargado en: %s", archivo_ruta)
 
             if archivo_ruta == "NoCSV":
                 _logger.error("Syscom: El archivo descargado no es un CSV válido. Verifique la URL y el acceso al recurso.")
-                var._eliminar_archivo_previo = False
+                # BUG-32: var._eliminar_archivo_previo eliminado — era escritura sobre instancia
+                # compartida a nivel de módulo (race condition entre workers); la bandera
+                # nunca se leía para tomar decisiones reales.
                 raise ValueError("No se descargo el csv correctamente.")
 
             self._csv_limpiar(archivo_ruta, mantener_respaldo=True)
@@ -189,7 +189,7 @@ class SyscomConfig(models.Model):
             }
 
             if var._logger_info:
-                _logger.info(f"Descargando CSV desde: {self.syscom_url_csv[:100]}...")
+                _logger.info(f"Descargando CSV desde: {str(self.syscom_url_csv)[:100]}...")
 
             # Buscar última descarga válida en la bitácora para usar como respaldo
             previous_log = self.env['syscom.log'].search([
@@ -242,7 +242,7 @@ class SyscomConfig(models.Model):
             # def print_progress
 
             response = requests.get(
-                self.syscom_url_csv,
+                str(self.syscom_url_csv),
                 headers=headers,
                 timeout=300,  # 5 minutos máximo
                 stream=True,
@@ -346,9 +346,12 @@ class SyscomConfig(models.Model):
                 _logger.info('Limpiando archivos antiguos en el directorio de descargas...')
             for nombre_archivo in os.listdir(download_dir):
                 ruta_archivo = os.path.join(download_dir, nombre_archivo)
-                ruta_bak = ruta_archivo + "_bak"
+                # BUG-31: condición anterior era `ruta_bak == archivo_actual`
+                # (ruta_archivo+"_bak" == archivo_actual), que nunca era verdadera
+                # si archivo_actual no es un _bak. La condición correcta protege
+                # tanto el archivo actual como su respaldo generado por _csv_limpiar.
                 if ruta_archivo == archivo_actual or \
-                   ruta_bak == archivo_actual:
+                   ruta_archivo == archivo_actual + "_bak":
                     continue
                 es_csv_syscom = (
                     nombre_archivo.startswith('syscom_products_')
@@ -385,7 +388,10 @@ class SyscomConfig(models.Model):
         try:
             normaliza_csv(ruta_csv_inicial, ruta_csv_salida)
             # Paso 2: Swapping de archivos
-            shutil.copy(ruta_csv_inicial, ruta_csv_respaldo)
+            # MEJORA-37: mantener_respaldo ahora condiciona la creación del _bak;
+            # antes siempre se creaba ignorando el parámetro.
+            if mantener_respaldo:
+                shutil.copy(ruta_csv_inicial, ruta_csv_respaldo)
             shutil.move(ruta_csv_salida, ruta_csv_inicial)
 
             # Paso 3: Log en Odoo
@@ -400,7 +406,7 @@ class SyscomConfig(models.Model):
                 'tasa_cambio': 0.0,
             })
 
-            return ruta_csv_respaldo
+            return ruta_csv_respaldo if mantener_respaldo else ''
 
         except Exception as e:
             raise UserError(f'Error fatal al limpiar CSV, funcion csv_limpiar_pd: {str(e)}')
@@ -435,13 +441,13 @@ class SyscomConfig(models.Model):
                     'supplier_rank': 1,
                 }]
             )
-            self._registrar_log(descripcion=f"Proveedor '{var._proveedor_nombre}'"
-                               f"creado con ID {datos_proveedor.id}"
+            self._registrar_log(descripcion=f"Proveedor {var._proveedor_nombre} "
+                               f"creado con ID {datos_proveedor.id} "
                                f"para importación Syscom.",
                                tipo_operacion='Creación de Proveedor')
         else:
-            self._registrar_log(descripcion=f"Proveedor '{var._proveedor_nombre}'"
-                               f"encontrado con ID {datos_proveedor.id}"
+            self._registrar_log(descripcion=f"Proveedor {var._proveedor_nombre} "
+                               f"encontrado con ID {datos_proveedor.id} "
                                f"para importación Syscom.",
                                tipo_operacion='Proveedor Existente')
 
@@ -470,7 +476,8 @@ class SyscomConfig(models.Model):
                 prod_syscom_procesados,
             ) = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesados)
 
-            provider_actualizados = self._actualizar_syscom_provider_individual(d_prod_syscom_actualizar)
+            # MEJORA-36: reemplazado actualización individual por SQL batch (equivalente al de product.template)
+            provider_actualizados = self._actualizar_syscom_provider_sql_batch(d_prod_syscom_actualizar)
             provider_creados = self._procesar_batch_creacion_syscom_provider(l_prod_syscom_crear_vals)
 
             productos_registrados = self._procesar_info_proveedor(
@@ -604,8 +611,10 @@ class SyscomConfig(models.Model):
             resultado = (standard_price, list_price)
             return resultado
         except Exception:
-            resultado = (None, None)
-            return resultado
+            # BUG-29: antes retornaba (None, None) — una tupla no vacía es truthy,
+            # por lo que el guard `if not precios:` en _leer_csv nunca la detectaba
+            # y los None se propagaban a la BD. Retornar None permite que el guard funcione.
+            return None
 
     def _set_or_create_brand(self, nombre_marca, marca_cache=None) -> int:
         """Busca o crea una marca en el modelo product.brand.
@@ -676,6 +685,9 @@ class SyscomConfig(models.Model):
                     'name': linea_datos['name'],
                     'standard_price': linea_datos['standard_price'],
                     'list_price': linea_datos['list_price'],
+                    # MEJORA-38: categ_id incluido para mantener la categoría sincronizada
+                    # con Syscom en cada importación (antes solo se asignaba al crear).
+                    'categ_id': categoria.id if categoria else False,
                     # Estos deberian de ser campos personalizados en el modelo
                     #  supplierinfo o en un modelo relacionado, no en
                     # product.template directamente, ajustar según corresponda
@@ -720,7 +732,7 @@ class SyscomConfig(models.Model):
 
         d_productos_actualizar = {}
         l_productos_crear_vals = []
-        default_code_provider_syscom = {}
+        lista_DCode_IDSyscom = {}
         producto_template_default_code_id_map = {}
         contador_productos_procesados = 0
         contador_omitidos = 0
@@ -729,9 +741,18 @@ class SyscomConfig(models.Model):
 
         try:
             if datos_syscom_proveedor:
+                #set_productos_provider_syscom = self.env['product.provider.syscom'].search([
+                #    ('default_code', 'in', codigos_a_procesar)
+                #])
+                # MEJORA-34: antes era search([]) — cargaba TODA la tabla sin filtro,
+                # lo que se vuelve muy costoso conforme crece el catálogo. Filtrar por
+                # codigos_a_procesar limita la consulta a los códigos del CSV actual.
+                # La detección de duplicados (lista_DCode_IDSyscom) sigue funcionando
+                # dentro del subconjunto importado.
                 set_productos_provider_syscom = self.env['product.provider.syscom'].search([
                     ('default_code', 'in', codigos_a_procesar)
                 ])
+
                 # Fix para detectar códigos duplicados en product.provider.syscom que podrían causar problemas de clasificación
                 # debemos de cambiar la comparacion de default_code que en ocasiones puede ser duplicada en el csv,
                 # ya que puede tratarse del mismo producto pero con un producto descatlogado o modelo distinto,
@@ -740,7 +761,7 @@ class SyscomConfig(models.Model):
                 # modificamos para usar en lugar de default_code como clave, una tupla de (default_code, id_syscom)
                 # para intentar evitar falsos positivos en la detección de duplicados, aunque esto dependerá de la
                 # calidad de los datos en el csv.
-                default_code_provider_syscom = {(p.default_code, p.id_syscom): p for p in set_productos_provider_syscom}
+                lista_DCode_IDSyscom = {(p.default_code, p.id_syscom): p for p in set_productos_provider_syscom}
                 lista_productos_template = self.env['product.template'].search_read(
                     [
                         ('default_code', 'in', codigos_a_procesar)
@@ -749,8 +770,10 @@ class SyscomConfig(models.Model):
                      'id'
                     ]
                 )
-                ids_en_dict ={p.id for p in default_code_provider_syscom.values()}
-                productos_perdidos_duplicados = set_productos_provider_syscom.filtered(lambda p: p.id not in ids_en_dict)
+                lista_ids_DCode_IDSyscom = {p.id for p in lista_DCode_IDSyscom.values()}
+                productos_perdidos_duplicados = set_productos_provider_syscom.filtered(
+                    lambda p: p.id not in lista_ids_DCode_IDSyscom
+                    )
 
                 if productos_perdidos_duplicados:
                     detalle = [(p.id, p.default_code, p.id_syscom) for p in productos_perdidos_duplicados]
@@ -771,10 +794,10 @@ class SyscomConfig(models.Model):
                 producto_template_default_code_id_map = {p['default_code']: p['id'] for p in lista_productos_template}
                 conteo_codigos_a_procesar = len(codigos_a_procesar)
                 conteo_set_provider = len(set_productos_provider_syscom)
-                conteo_default_code_provider = len(default_code_provider_syscom)
-                conteo_productos_template = len(lista_productos_template)
+                conteo_default_code_provider = len(lista_DCode_IDSyscom)
                 conteo_datos_syscom_proveedor = len(datos_syscom_proveedor)
-                lista_productos_existentes = list(default_code_provider_syscom)[:10]
+                conteo_productos_template = len(lista_productos_template)
+                lista_productos_existentes = list(lista_DCode_IDSyscom)[:10]
 
                 if var._logger_info:
                     _logger.info(
@@ -785,10 +808,13 @@ class SyscomConfig(models.Model):
                     )
                     _logger.info(f' productos_existentes: {lista_productos_existentes}.')
             else:
+                # BUG-30/39: raise y log estaban dentro de `if var._logger_info:` —
+                # el error solo se lanzaba con logging activo. Movido fuera del bloque.
+                # También corregido typo: mensage → mensaje.
+                mensaje = 'No se proporcionaron datos de proveedor syscom para clasificar.'
                 if var._logger_info:
-                    mensage = 'No se proporcionaron datos de proveedor syscom para clasificar.'
-                    _logger.info(mensage)
-                    raise UserError(mensage)
+                    _logger.info(mensaje)
+                raise UserError(mensaje)
 
             for ldatos in datos_syscom_proveedor:
                 default_code = ldatos['default_code']
@@ -799,8 +825,8 @@ class SyscomConfig(models.Model):
                 except (ValueError, TypeError):
                     syscom_inventory = 0
 
-                if clave in default_code_provider_syscom:
-                    product = default_code_provider_syscom[clave]
+                if clave in lista_DCode_IDSyscom:
+                    product = lista_DCode_IDSyscom[clave]
                     d_productos_actualizar[product.id] = {
                         'syscom_inventory': syscom_inventory,
                         'syscom_url': ldatos.get('syscom_url'),
@@ -1024,6 +1050,72 @@ class SyscomConfig(models.Model):
             )
         return total
 
+    def _actualizar_syscom_provider_sql_batch(self, productos_actualizar) -> int:
+        """Actualiza product.provider.syscom usando SQL batch con fallback individual.
+        MEJORA-35: equivalente a _actualizar_productos_sql_batch pero para el modelo
+        de proveedor Syscom. Todos los campos son columnas directas (no JSONB ni
+        price.history), por lo que un solo UPDATE por chunk es suficiente.
+        Actualiza además last_update con la hora UTC de la ejecución.
+        Args:
+            productos_actualizar (dict): {record_id: {syscom_inventory, syscom_url, syscom_url_imagen}}
+        Returns:
+            int: Número de registros actualizados.
+        """
+        if not productos_actualizar:
+            return 0
+
+        total = len(productos_actualizar)
+        chunk_size = var._registros_por_batch
+        inicio = datetime.now()
+
+        def _elapsed():
+            return (datetime.now() - inicio).total_seconds()
+
+        if var._logger_info:
+            _logger.info('syscom_provider_sql_batch — inicio total=%d chunk_size=%d', total, chunk_size)
+
+        try:
+            ahora = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            rows = [
+                (
+                    vals['syscom_inventory'],
+                    vals.get('syscom_url'),
+                    vals.get('syscom_url_imagen'),
+                    ahora,
+                    record_id,
+                )
+                for record_id, vals in productos_actualizar.items()
+            ]
+            sql = """UPDATE product_provider_syscom
+                        SET syscom_inventory=%s, syscom_url=%s,
+                            syscom_url_imagen=%s, last_update=%s
+                      WHERE id=%s"""
+            procesados = 0
+            for i in range(0, total, chunk_size):
+                chunk = rows[i:i + chunk_size]
+                self.env.cr.executemany(sql, chunk)
+                procesados += len(chunk)
+                if var._logger_info:
+                    _logger.info(
+                        'syscom_provider_sql_batch pct=%.1f%% registros=%d/%d elapsed=%.1fs',
+                        procesados / total * 100, procesados, total, _elapsed(),
+                    )
+            ids = list(productos_actualizar.keys())
+            self.env['product.provider.syscom'].browse(ids).invalidate_recordset([
+                'syscom_inventory', 'syscom_url', 'syscom_url_imagen', 'last_update',
+            ])
+            if var._logger_info:
+                _logger.info(
+                    'syscom_provider_sql_batch — completado total=%d elapsed=%.1fs',
+                    total, _elapsed(),
+                )
+        except Exception as e:
+            _logger.error('syscom_provider_sql_batch — error: %s', e, exc_info=True)
+            if var._logger_info:
+                _logger.info('syscom_provider_sql_batch — fallback a actualización individual')
+            return self._actualizar_syscom_provider_individual(productos_actualizar)
+        return total
+
     def _procesar_batch_creacion(self, productos_crear_vals) -> int:
         """Procesa la creación de nuevos productos en batch.
         Args:
@@ -1086,6 +1178,8 @@ class SyscomConfig(models.Model):
             _logger.info('Iniciando creación en batch de nuevos registros de proveedor syscom...')
 
         productos_creados = 0
+        contador_omitidos_unique = 0
+        contador_excepciones = 0
         if productos_crear_vals:
             batch_size = var._registros_por_batch
 
@@ -1098,7 +1192,13 @@ class SyscomConfig(models.Model):
                     with self.env.cr.savepoint():
                         created_chunk = self.env['product.provider.syscom'].create(chunk)
                         productos_creados += len(created_chunk)
-                except Exception as excepcion_error:
+                except UniqueViolation as excepcion_error:
+                    contador_omitidos_unique += 1
+                    _logger.warning(
+                        'Duplicado omitido, se encontró un registro con clave (default_code, id_syscom) ' \
+                        'duplicada en product.provider.syscom durante creación en batch.' \
+                        'Se procede a tratar de crear los registros uno por uno para identificar los duplicados exactos. ' \
+                    )
                     _logger.error(f'Error creando batch de proveedor syscom (offset {elemento}): {excepcion_error}', exc_info=True)
                     for valores in chunk:
                         try:
@@ -1106,23 +1206,28 @@ class SyscomConfig(models.Model):
                                 self.env['product.provider.syscom'].create(valores)
                                 productos_creados += 1
                         except UniqueViolation:
+                            contador_omitidos_unique += 1
                             _logger.warning(
                                 'Duplicado omitido — id_syscom=%s partner_id=%s ya existe.',
                                 valores.get('id_syscom'), valores.get('partner_id'),
                             )
                         except Exception as e_individual:
+                            contador_excepciones += 1
                             _logger.error(
                                 f'Error creando elemento product.product.syscom con default_code =  {valores.get("default_code", "N/A")}:  {e_individual}',
                                 exc_info=True,
                             )
+        if var._logger_info:
+            _logger.info(f'Registros creados: {productos_creados}, Omitidos (duplicados): {contador_omitidos_unique}, Excepciones: {contador_excepciones}')
         return productos_creados
 
-    def _log_crear(self, vals: dict) -> int:
+    def _log_crear(self, vals: dict):
         """Persiste un registro en syscom.log usando su propio cursor,
         garantizando que sobrevive a rollbacks de la transacción principal."""
         with self.env.registry.cursor() as new_cr:
             new_env = api.Environment(new_cr, self.env.uid, {})
-            return new_env['syscom.log'].create(vals).id
+            registros = new_env['syscom.log'].create([vals]).id
+            return registros
 
     def _registrar_log(self, descripcion='Falta descripcion', tipo_operacion='Operacion no especificada'):
         try:
@@ -1247,10 +1352,10 @@ class SyscomConfig(models.Model):
                     ('parent_id', '=', parent_id)
                 ], limit=1)
                 if not categoria_id:
-                    categoria_id = self.env['product.category'].create({
+                    categoria_id = self.env['product.category'].create([{
                         'name': categoria_nombre,
                         'parent_id': parent_id,
-                    })
+                    }])
                 categoria_cache[cache_key] = categoria_id
             parent_id = categoria_id.id
         return categoria_id
