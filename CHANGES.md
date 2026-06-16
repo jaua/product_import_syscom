@@ -27,6 +27,7 @@
 | 37 | `models/syscom_config.py` | `mantener_respaldo` en `_csv_limpiar` ahora condiciona la creación del archivo `_bak`; antes siempre se creaba ignorando el parámetro |
 | 38 | `models/syscom_config.py` | `categ_id` incluido en la actualización de productos existentes para mantener la categoría sincronizada con Syscom en cada importación |
 | 39 | `models/syscom_config.py` | Typo `mensage` → `mensaje` en `_clasificar_syscom_provider` |
+| 40 | `models/syscom_config.py` | `_clasificar_syscom_product`: detecta la categoría raíz de Odoo (`parent_id=False`) una vez antes del loop y la antecede a la ruta del CSV; evita que los niveles de Syscom (ej. "Redes") se creen como categorías raíz huérfanas paralelas a "Todos/All". Agnóstico al idioma; fallback al comportamiento anterior si no hay raíz |
 
 ---
 

@@ -341,11 +341,11 @@ class SyscomConfig(models.Model):
     def _limpiar_archivos_antiguos(self, archivo_actual):
         """Elimina archivos CSV descargados antiguos, manteniendo solo el actual."""
         try:
-            download_dir = var._ruta_descarga
+            directorio_descarga = var._ruta_descarga
             if var._logger_info:
                 _logger.info('Limpiando archivos antiguos en el directorio de descargas...')
-            for nombre_archivo in os.listdir(download_dir):
-                ruta_archivo = os.path.join(download_dir, nombre_archivo)
+            for nombre_archivo in os.listdir(directorio_descarga):
+                ruta_archivo = os.path.join(directorio_descarga, nombre_archivo)
                 # BUG-31: condición anterior era `ruta_bak == archivo_actual`
                 # (ruta_archivo+"_bak" == archivo_actual), que nunca era verdadera
                 # si archivo_actual no es un _bak. La condición correcta protege
@@ -672,11 +672,33 @@ class SyscomConfig(models.Model):
                 ('default_code', 'in', codigos_a_procesar)
             ])
             productos_existentes = {p.default_code: p for p in productos_actuales}
+
+        # MEJORA-40: detectar la categoría raíz de Odoo una sola vez antes del loop.
+        # Sin esto, los niveles del CSV (ej. "Redes") se creaban como raíces huérfanas
+        # paralelas a "Todos/All", desconectadas de la jerarquía estándar de Odoo.
+        # La búsqueda por parent_id=False es agnóstica al idioma ("Todos" o "All").
+        cat_raiz = self.env['product.category'].search([('parent_id', '=', False)], limit=1)
+        cat_raiz_nombre = cat_raiz.name if cat_raiz else None
+        if var._logger_info:
+            _logger.info(
+                'Categoría raíz detectada: %s (id=%s)',
+                cat_raiz_nombre, cat_raiz.id if cat_raiz else 'N/A',
+            )
+
         categoria_cache = {}
         for linea_datos in datos_syscom_product:
             default_code = linea_datos['default_code']
+
+            # MEJORA-40: anteceder la raíz a la ruta del CSV para que las categorías
+            # queden anidadas bajo "Todos/All" en lugar de crearse como raíces sueltas.
+            # Si no se encontró raíz (cat_raiz_nombre=None), se usa la ruta original
+            # como fallback para no romper el comportamiento previo.
+            categoria_path = (
+                [cat_raiz_nombre] + linea_datos['categoria_path']
+                if cat_raiz_nombre else linea_datos['categoria_path']
+            )
             categoria = self._get_or_create_category_from_parts(
-                linea_datos['categoria_path'], categoria_cache
+                categoria_path, categoria_cache
             )
             if default_code in productos_existentes:
                 product = productos_existentes[default_code]
@@ -1339,6 +1361,7 @@ class SyscomConfig(models.Model):
 
         if not lst_categorias:
             return categoria_id
+
         lista_filtrada = [p.strip() for p in lst_categorias if p and p.strip()]
         if not lista_filtrada:
             return categoria_id
