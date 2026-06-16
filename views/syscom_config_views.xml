@@ -25,6 +25,9 @@
                                    widget="text"/>
                             <field name="ganancia_porcentaje"/>
                             <field name="usd_a_mxn"/>
+                            <!-- MEJORA-46: tasa_cambio visible solo cuando se activa conversión USD→MXN -->
+                            <field name="tasa_cambio"
+                                   invisible="not usd_a_mxn"/>
                         </group>
                     </group>
                     <notebook>

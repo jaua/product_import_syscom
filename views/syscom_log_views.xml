@@ -8,6 +8,7 @@
                 <field name="tamano_descarga"/>
                 <field name="ruta_archivo"/>
                 <field name="url_origen"/>
+                <field name="tasa_cambio"/>
                 <field name="categorias_importadas"/>
                 <field name="tipo_accion"/>
             </list>
@@ -25,6 +26,7 @@
                         <group>
                             <field name="fecha_descarga"/>
                             <field name="tamano_descarga"/>
+                            <field name="tasa_cambio"/>
                         </group>
                         <group>
                             <field name="url_origen"/>

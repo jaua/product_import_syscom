@@ -3,6 +3,7 @@ from .syscom_parametros import SyscomParametros as Parametros
 import logging
 
 _logger = logging.getLogger(__name__)
+var = Parametros()  # MEJORA-49: instancia a nivel de módulo, no una por llamada
 
 
 def decodifica_linea(linea_de_texto: bytes) -> str:
@@ -61,7 +62,6 @@ def normaliza_csv(ruta_de_entrada: str, ruta_de_salida: str) -> None:
 
             file_out.write(line)
 
-    var = Parametros()
     if var._logger_info:
         _logger.info(f"\nArchivo normalizado: {ruta_de_salida}")
         _logger.info(f"Líneas re-codificadas desde Latin-1 : {lineas_corregidas}")

@@ -18,15 +18,19 @@ class SyscomParametros():
     _logger_info = True
     _logger_debug = False
     _logger_funcname = True  # prefija [nombre_funcion] en cada mensaje de log
-    _mostrar_progreso = True
-    _progreso_intervalo = 10
-    _actualizar_precios = True
-    _actualizar_inventario = True
-    _actualizar_url = True
-    _actualizar_url_imagen = True
-    _actualizar_obsoleto = True
-    _crear_productos_nuevos = True
+    # MEJORA-48: atributos reservados para implementación futura — actualmente no consultados en código
+    _mostrar_progreso = True      # pendiente: mostrar barra de progreso en UI
+    _progreso_intervalo = 10      # pendiente: intervalo de actualización del progreso
+    _actualizar_precios = True    # pendiente: toggle para omitir actualización de precios
+    _actualizar_inventario = True # pendiente: toggle para omitir actualización de inventario
+    _actualizar_url = True        # pendiente: toggle para omitir actualización de URL
+    _actualizar_url_imagen = True # pendiente: toggle para omitir actualización de imagen
+    _actualizar_obsoleto = True   # pendiente: toggle para marcar productos sin stock como obsoletos
+    _crear_productos_nuevos = True # pendiente: toggle para omitir creación de productos nuevos
+    _archivo_prueba = f"{_ruta_descarga}/verifica.txt"  # pendiente: verificación de conectividad
+    _categoria_separador = ' \ '  # pendiente: separador de jerarquía de categorías en UI
 
     def __init__(self):
         # Atributo de instancia: su valor varía por ejecución y no debe ser compartido entre instancias
+        # pendiente (BUG-32): _eliminar_archivo_previo ya no se consulta tras la refactorización
         self._eliminar_archivo_previo = True

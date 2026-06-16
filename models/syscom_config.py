@@ -99,7 +99,6 @@ class SyscomConfig(models.Model):
 
             tiempo_limite_seg = self.periodo_segundos
             diferencia = 3600  # Valor inicial alto
-            ruta_archivo_previo = ""
             reutilizar_archivo = False
 
             last_log = self.env['syscom.log'].search(
@@ -244,7 +243,7 @@ class SyscomConfig(models.Model):
             response = requests.get(
                 str(self.syscom_url_csv),
                 headers=headers,
-                timeout=300,  # 5 minutos máximo
+                timeout=var._tiempo_espera_descarga,  # MEJORA-44: usa el parámetro configurable
                 stream=True,
                 allow_redirects=True
             )
@@ -503,6 +502,10 @@ class SyscomConfig(models.Model):
         marca_cache = {}  # Cache para marcas ya procesadas
         contador_de_lineas_csv = 0
         contador_de_procesados = 0
+        # MEJORA-43: verificar disponibilidad de product.brand una sola vez
+        brand_disponible = "product.brand" in self.env.registry
+        if not brand_disponible:
+            _logger.warning('El módulo product_brand no está instalado, no se asignará marca a los productos importados.')
 
         with open(ruta_archivo, 'r', encoding='utf-8-sig') as archivo_csv:
             lector_csv = csv.DictReader(archivo_csv)
@@ -523,7 +526,7 @@ class SyscomConfig(models.Model):
                 su_precio = fila_datos_csv.get('Su Precio', '0').strip()
                 tipo_cambio_str = fila_datos_csv.get('Tipo de Cambio', '').strip()
                 marca_nombre = fila_datos_csv.get('Marca', var._sin_marca_nombre).strip()
-                marca_id = self._set_or_create_brand(marca_nombre, marca_cache)
+                marca_id = self._set_or_create_brand(marca_nombre, marca_cache) if brand_disponible else False
 
                 if tipo_cambio_str and not tipo_cambio_csv:
                     try:
@@ -580,6 +583,9 @@ class SyscomConfig(models.Model):
         if var._logger_info:
             _logger.info(f'CSV procesado completamente. Total filas procesadas: {contador_de_lineas_csv}, Productos a importar: {contador_de_procesados}')
 
+        # MEJORA-45: deduplicar preservando orden (el CSV puede tener el mismo default_code dos veces)
+        lista_codigos_procesados = list(dict.fromkeys(lista_codigos_procesados))
+
         resultados = (datos_syscom_product,
                       datos_syscom_provider,
                       tipo_cambio_csv,
@@ -598,7 +604,6 @@ class SyscomConfig(models.Model):
             tuple: Una tupla con el precio estándar y el precio de
               venta.
         """
-        resultado = None
         try:
             price_raw = float(su_precio.replace(',', ''))
             actual_tasa_cambio = getattr(self, 'tasa_cambio', var._mxn_valor)
@@ -608,8 +613,7 @@ class SyscomConfig(models.Model):
             else:
                 standard_price = round(price_raw, 2)
             list_price = round(standard_price * (1 + (self.ganancia_porcentaje / 100)), 2)
-            resultado = (standard_price, list_price)
-            return resultado
+            return (standard_price, list_price)  # MEJORA-51
         except Exception:
             # BUG-29: antes retornaba (None, None) — una tupla no vacía es truthy,
             # por lo que el guard `if not precios:` en _leer_csv nunca la detectaba
@@ -627,25 +631,18 @@ class SyscomConfig(models.Model):
         if marca_cache is None:
             marca_cache = {}
         marca_id = False
-        if "product.brand" in self.env.registry:
-            if nombre_marca in marca_cache:
-                marca_id = marca_cache[nombre_marca]
-                return marca_id
-            else:
-                marca_id = self.env['product.brand'].search(
-                    [('name', '=', nombre_marca)],
-                    limit=1)
-            if not marca_id:
-                marca_id = self.env['product.brand'].create([{
-                    'name': nombre_marca,
-                }])
-
-            marca_id = marca_id.id
-            marca_cache[nombre_marca] = marca_id
-            return marca_id
-        else:
-            _logger.warning('El módulo product_brand no está instalado, no se asignará marca a los productos importados.')
-            return marca_id
+        if nombre_marca in marca_cache:
+            return marca_cache[nombre_marca]
+        marca_id = self.env['product.brand'].search(
+            [('name', '=', nombre_marca)],
+            limit=1)
+        if not marca_id:
+            marca_id = self.env['product.brand'].create([{
+                'name': nombre_marca,
+            }])
+        marca_id = marca_id.id
+        marca_cache[nombre_marca] = marca_id
+        return marca_id
 
     def _clasificar_syscom_product(self, datos_syscom_product, codigos_a_procesar) -> tuple:
         """Clasifica los productos en dos grupos: los que se deben actualizar.
@@ -761,6 +758,14 @@ class SyscomConfig(models.Model):
         productos_perdidos_duplicados = None
 
 
+        # BUG-42: validación fuera del try para que el UserError no sea tragado
+        # por el except Exception que envuelve el procesamiento.
+        if not datos_syscom_proveedor:
+            mensaje = 'No se proporcionaron datos de proveedor syscom para clasificar.'
+            if var._logger_info:
+                _logger.info(mensaje)
+            raise UserError(mensaje)
+
         try:
             if datos_syscom_proveedor:
                 #set_productos_provider_syscom = self.env['product.provider.syscom'].search([
@@ -829,15 +834,6 @@ class SyscomConfig(models.Model):
                         conteo_productos_template,
                     )
                     _logger.info(f' productos_existentes: {lista_productos_existentes}.')
-            else:
-                # BUG-30/39: raise y log estaban dentro de `if var._logger_info:` —
-                # el error solo se lanzaba con logging activo. Movido fuera del bloque.
-                # También corregido typo: mensage → mensaje.
-                mensaje = 'No se proporcionaron datos de proveedor syscom para clasificar.'
-                if var._logger_info:
-                    _logger.info(mensaje)
-                raise UserError(mensaje)
-
             for ldatos in datos_syscom_proveedor:
                 default_code = ldatos['default_code']
                 id_syscom = ldatos.get('id_syscom')
@@ -957,19 +953,22 @@ class SyscomConfig(models.Model):
 
         try:
             # Fase 1: SQL batch en chunks — campos varchar/numeric directos en product_template
+            # BUG-41: categ_id incluido en la tupla y en el SET para que MEJORA-38 tenga efecto
             rows_template = [
                 (
                     vals['list_price'],
                     vals.get('product_url_ref'),
                     vals.get('product_url_image'),
                     vals.get('product_brand_id'),
+                    vals.get('categ_id') or None,
                     product_id,
                 )
                 for product_id, vals in productos_actualizar.items()
             ]
             sql = """UPDATE product_template
                         SET list_price=%s, product_url_ref=%s,
-                            product_url_image=%s, product_brand_id=%s
+                            product_url_image=%s, product_brand_id=%s,
+                            categ_id=COALESCE(%s, categ_id)
                       WHERE id=%s"""
             procesados_sql = 0
             for i in range(0, total, chunk_size):

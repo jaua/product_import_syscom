@@ -1,5 +1,40 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-06-16 (revisión 6 — bugs críticos + mejoras)
+
+### Bugs corregidos
+
+| #  | Archivo | Descripción | Gravedad |
+|----|---------|-------------|----------|
+| 41 | `models/syscom_config.py` | `_actualizar_productos_sql_batch`: `categ_id` no se incluía en el SQL UPDATE (MEJORA-38 sin efecto); agregado al SET con `COALESCE` para no sobreescribir con NULL cuando no hay categoría | Alta |
+| 42 | `models/syscom_config.py` | `_clasificar_syscom_provider`: `raise UserError` dentro del `try` era tragado por el `except Exception` y se lograba silenciosamente; validación movida antes del `try` | Alta |
+
+### Mejoras de rendimiento / comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 43 | `models/syscom_config.py` | `_leer_csv`: verificación de `product.brand` en registry movida a una sola vez antes del loop; antes se emitía un warning por cada fila del CSV cuando el módulo no estaba instalado |
+| 44 | `models/syscom_config.py` | `_descargar_csv`: `timeout=300` hardcodeado reemplazado por `var._tiempo_espera_descarga` (parámetro configurable de `SyscomParametros`) |
+| 45 | `models/syscom_config.py` | `_leer_csv`: `lista_codigos_procesados` deduplicada con `dict.fromkeys` antes de retornar; un CSV con el mismo `default_code` dos veces generaba entradas duplicadas innecesarias |
+
+### Vistas
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 46 | `views/syscom_config_views.xml` | Campo `tasa_cambio` visible en el formulario de `syscom.config` cuando `usd_a_mxn` está activo |
+| 47 | `views/syscom_log_views.xml` | Campo `tasa_cambio` agregado a la vista de lista y formulario de `syscom.log` |
+
+### Documentación / limpieza
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 48 | `models/syscom_parametros.py` | Atributos sin uso documentados como "reservados para implementación futura" con descripción de su propósito pendiente |
+| 49 | `models/csv_utilerias.py` | `var = Parametros()` movido a nivel de módulo; antes se instanciaba una nueva `Parametros()` en cada llamada a `normaliza_csv` |
+| 50 | `models/syscom_config.py` | `ejecutar_importacion`: eliminada asignación muerta `ruta_archivo_previo = ""` (sobreescrita inmediatamente en la línea siguiente) |
+| 51 | `models/syscom_config.py` | `_calcular_precios`: simplificado de `resultado = None` / `resultado = (x, y)` / `return resultado` a `return (standard_price, list_price)` directo |
+
+---
+
 ## [Pendiente de versión] — 2026-06-15 (revisión 5 — bugs y rendimiento)
 
 ### Bugs corregidos
