@@ -1,5 +1,15 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-06-17 (revisión 7)
+
+### Bugs corregidos
+
+| #  | Archivo | Descripción | Gravedad |
+|----|---------|-------------|----------|
+| 52 | `models/syscom_config.py` | `ejecutar_importacion`: sin guard de concurrencia — dos workers o un cron + botón manual podían correr simultáneamente corrompiendo datos; agregado `pg_try_advisory_xact_lock` al inicio; si ya hay lock: UI lanza `UserError` claro, cron emite warning y retorna sin error | Alta |
+
+---
+
 ## [Pendiente de versión] — 2026-06-16 (revisión 6 — bugs críticos + mejoras)
 
 ### Bugs corregidos

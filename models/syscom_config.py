@@ -17,6 +17,9 @@ from psycopg2.errors import UniqueViolation
 var = Parametros()
 _logger = logging.getLogger(__name__)
 
+# BUG-52: clave fija para pg_try_advisory_xact_lock — evita ejecuciones concurrentes
+_SYSCOM_LOCK_KEY = 0x53595343  # "SYSC"
+
 
 class _FuncNameFilter(logging.Filter):
     def filter(self, record):
@@ -90,9 +93,17 @@ class SyscomConfig(models.Model):
             raise UserError('No hay configuración de Syscom definida.')
         return config
 
-    def ejecutar_importacion(self):
+    def ejecutar_importacion(self, desde_cron=False):
         """Ejecutar el proceso de importación manualmente"""
         self.ensure_one()
+        # BUG-52: lock a nivel de transacción — una sola instancia concurrente
+        self.env.cr.execute("SELECT pg_try_advisory_xact_lock(%s)", (_SYSCOM_LOCK_KEY,))
+        if not self.env.cr.fetchone()[0]:
+            if desde_cron:
+                _logger.warning('Syscom cron: omitido, ya hay una importación en curso.')
+                return None
+            raise UserError('Ya hay una importación de Syscom en curso. '
+                            'Espere a que termine antes de iniciar otra.')
         try:
             if var._logger_info:
                 _logger.info('Iniciando importación manual desde Syscom')
@@ -1386,4 +1397,4 @@ class SyscomConfig(models.Model):
     def cron_importar_syscom(self):
         """Método llamado por el cron para importación automática"""
         config = self.get_config()
-        config.ejecutar_importacion()
+        config.ejecutar_importacion(desde_cron=True)
