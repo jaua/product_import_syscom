@@ -82,7 +82,7 @@ class SyscomConfig(models.Model):
     tasa_cambio = fields.Float(
         string='Tasa de cambio (USD → Moneda local)',
         default=1.0,
-        help='Respaldo: tasa para convertir precios en USD a MXN si no se encuentre en el CSV.'
+        help='Último respaldo manual: se usa solo si el CSV no incluye tipo de cambio Y la moneda USD no está configurada en el sistema Odoo.'
     )
 
     @api.model
@@ -212,10 +212,6 @@ class SyscomConfig(models.Model):
                 previous_file = previous_log.ruta_archivo
                 if var._logger_info:
                     _logger.info(f"Syscom: Archivo previo disponible para respaldo: {previous_file}")
-
-            self.tasa_cambio = round((var._mxn_valor /
-                                      self.env.ref('base.USD').rate),
-                                     var._digitos_redondeo)
 
             start_time = fields.Datetime.now()
             last_print_time = start_time
@@ -604,6 +600,18 @@ class SyscomConfig(models.Model):
 
         return resultados
 
+    def _tasa_efectiva(self, tipo_cambio_csv):
+        """BUG-53: prioridad de tasa de cambio: CSV → sistema Odoo → UI del módulo."""
+        if tipo_cambio_csv:
+            return tipo_cambio_csv
+        try:
+            usd = self.env.ref('base.USD')
+            if usd.rate:
+                return round(var._mxn_valor / usd.rate, var._digitos_redondeo)
+        except Exception:
+            pass
+        return self.tasa_cambio or var._mxn_valor
+
     def _calcular_precios(self, su_precio, tipo_cambio_csv) -> tuple:
         """Calcula el precio estándar y el precio de venta.
         A partir del precio de compra (su_precio) y el tipo de cambio.
@@ -617,9 +625,8 @@ class SyscomConfig(models.Model):
         """
         try:
             price_raw = float(su_precio.replace(',', ''))
-            actual_tasa_cambio = getattr(self, 'tasa_cambio', var._mxn_valor)
             if self.usd_a_mxn:
-                tasa = tipo_cambio_csv if tipo_cambio_csv else (actual_tasa_cambio)
+                tasa = self._tasa_efectiva(tipo_cambio_csv)
                 standard_price = round(price_raw * tasa, 2)
             else:
                 standard_price = round(price_raw, 2)
@@ -1344,7 +1351,7 @@ class SyscomConfig(models.Model):
         try:
             file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
             categorias_importadas = self.categorias_importar or '----'
-            tasa_log = tipo_cambio_csv if tipo_cambio_csv else (getattr(self, 'tasa_cambio', None) or 0.0)
+            tasa_log = self._tasa_efectiva(tipo_cambio_csv) if self.usd_a_mxn else 0.0
             self._log_crear({
                 'fecha_descarga': fields.Datetime.now(),
                 'tamano_descarga': f'{file_size / (1024 * 1024):.2f} MB',

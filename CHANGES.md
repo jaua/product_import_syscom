@@ -7,6 +7,7 @@
 | #  | Archivo | Descripción | Gravedad |
 |----|---------|-------------|----------|
 | 52 | `models/syscom_config.py` | `ejecutar_importacion`: sin guard de concurrencia — dos workers o un cron + botón manual podían correr simultáneamente corrompiendo datos; agregado `pg_try_advisory_xact_lock` al inicio; si ya hay lock: UI lanza `UserError` claro, cron emite warning y retorna sin error | Alta |
+| 53 | `models/syscom_config.py` | `_descargar_csv` sobreescribía `self.tasa_cambio` en BD con la tasa del sistema Odoo en cada importación, destruyendo el valor configurado por el usuario en la UI (conflicto con MEJORA-46); eliminada la escritura. Agregado `_tasa_efectiva()` con prioridad explícita: CSV → sistema Odoo → UI. Usado en `_calcular_precios` y `_registrar_log_importacion`. Actualizado `help` del campo | Alta |
 
 ---
 
