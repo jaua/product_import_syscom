@@ -11,6 +11,11 @@
                             type="object"
                             class="oe_highlight"
                             icon="fa-play"/>
+                    <button name="homologar_categorias"
+                            string="Homologar Categorías"
+                            type="object"
+                            icon="fa-sitemap"
+                            confirm="Esto migrará las categorías de TODOS los productos a la jerarquía Todos/All y eliminará las categorías obsoletas. ¿Continuar?"/>
                 </header>
                 <sheet>
                     <group>

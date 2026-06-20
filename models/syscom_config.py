@@ -688,16 +688,24 @@ class SyscomConfig(models.Model):
             ])
             productos_existentes = {p.default_code: p for p in productos_actuales}
 
-        # MEJORA-40: detectar la categoría raíz de Odoo una sola vez antes del loop.
+        # MEJORA-40/54: detectar la categoría raíz de Odoo una sola vez antes del loop.
         # Sin esto, los niveles del CSV (ej. "Redes") se creaban como raíces huérfanas
         # paralelas a "Todos/All", desconectadas de la jerarquía estándar de Odoo.
-        # La búsqueda por parent_id=False es agnóstica al idioma ("Todos" o "All").
-        cat_raiz = self.env['product.category'].search([('parent_id', '=', False)], limit=1)
+        # MEJORA-54: se detecta el idioma del usuario ejecutor para buscar primero
+        # "Todos" (es_*) o "All" (en_*); fallback a cualquier raíz con parent_id=False.
+        _idioma = self.env.user.lang or ''
+        _nombre_raiz_esperado = 'Todos' if _idioma.startswith('es') else 'All'
+        cat_raiz = self.env['product.category'].search([
+            ('name', '=', _nombre_raiz_esperado),
+            ('parent_id', '=', False),
+        ], limit=1)
+        if not cat_raiz:
+            cat_raiz = self.env['product.category'].search([('parent_id', '=', False)], limit=1)
         cat_raiz_nombre = cat_raiz.name if cat_raiz else None
         if var._logger_info:
             _logger.info(
-                'Categoría raíz detectada: %s (id=%s)',
-                cat_raiz_nombre, cat_raiz.id if cat_raiz else 'N/A',
+                'Categoría raíz detectada: %s (id=%s) [idioma=%s]',
+                cat_raiz_nombre, cat_raiz.id if cat_raiz else 'N/A', _idioma,
             )
 
         categoria_cache = {}
@@ -1365,6 +1373,153 @@ class SyscomConfig(models.Model):
                 _logger.info(f'Syscom: Tasa de cambio registrada en bitácora: {tasa_log}')
         except Exception:
             _logger.exception('No se pudo registrar la tasa de cambio en la bitácora')
+
+    def homologar_categorias(self):
+        """MEJORA-55: Migrar todos los productos a la jerarquía Todos/All.
+
+        Para cada categoría fuera de la jerarquía raíz:
+        - Busca equivalente por nombre normalizado (sin acentos, minúsculas) dentro de la jerarquía.
+        - Si no existe: crea Todos/All/Varios/{nombre_original} y mueve ahí los productos.
+        Finalmente elimina las categorías que quedan vacías y sin hijos (bottom-up).
+        """
+        import unicodedata
+        from collections import defaultdict
+
+        def _normalizar(texto):
+            nfkd = unicodedata.normalize('NFKD', texto or '')
+            return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
+
+        self.ensure_one()
+
+        # — Raíz (misma lógica que MEJORA-54) —
+        _idioma = self.env.user.lang or ''
+        _nombre_raiz = 'Todos' if _idioma.startswith('es') else 'All'
+        cat_raiz = self.env['product.category'].search([
+            ('name', '=', _nombre_raiz), ('parent_id', '=', False),
+        ], limit=1)
+        if not cat_raiz:
+            cat_raiz = self.env['product.category'].search([('parent_id', '=', False)], limit=1)
+        if not cat_raiz:
+            raise UserError('No se encontró categoría raíz en el sistema.')
+
+        # — Todos los descendientes actuales de la raíz (CTE recursivo) —
+        self.env.cr.execute("""
+            WITH RECURSIVE hijos AS (
+                SELECT id, name FROM product_category WHERE id = %s
+                UNION ALL
+                SELECT c.id, c.name
+                FROM product_category c
+                JOIN hijos h ON c.parent_id = h.id
+            )
+            SELECT id, name FROM hijos
+        """, (cat_raiz.id,))
+        ids_validas = set()
+        validas_por_nombre = {}
+        for cat_id, cat_name in self.env.cr.fetchall():
+            ids_validas.add(cat_id)
+            norm = _normalizar(cat_name)
+            if norm not in validas_por_nombre:
+                validas_por_nombre[norm] = cat_id
+
+        # — Categorías usadas actualmente que están fuera de la jerarquía —
+        self.env.cr.execute("""
+            SELECT DISTINCT pt.categ_id, pc.name
+            FROM product_template pt
+            JOIN product_category pc ON pc.id = pt.categ_id
+            WHERE pt.categ_id != ALL(%s)
+        """, (list(ids_validas),))
+        cats_invalidas = self.env.cr.fetchall()
+
+        if not cats_invalidas:
+            raise UserError('Todos los productos ya están en la jerarquía de categorías correcta.')
+
+        # — Obtener o crear Todos/All/Varios —
+        cat_varios = self.env['product.category'].search([
+            ('name', '=', 'Varios'), ('parent_id', '=', cat_raiz.id),
+        ], limit=1)
+        if not cat_varios:
+            cat_varios = self.env['product.category'].create({
+                'name': 'Varios',
+                'parent_id': cat_raiz.id,
+            })
+        ids_validas.add(cat_varios.id)
+
+        # — Mapping: cat_id_inválida → cat_id_destino —
+        mapping = {}
+        mapeadas = 0
+        a_varios = 0
+        for cat_id, cat_name in cats_invalidas:
+            norm = _normalizar(cat_name)
+            if norm in validas_por_nombre:
+                mapping[cat_id] = validas_por_nombre[norm]
+                mapeadas += 1
+            else:
+                destino = self.env['product.category'].search([
+                    ('name', '=', cat_name), ('parent_id', '=', cat_varios.id),
+                ], limit=1)
+                if not destino:
+                    destino = self.env['product.category'].create({
+                        'name': cat_name,
+                        'parent_id': cat_varios.id,
+                    })
+                mapping[cat_id] = destino.id
+                ids_validas.add(destino.id)
+                a_varios += 1
+
+        # — SQL batch UPDATE agrupado por destino —
+        por_destino = defaultdict(list)
+        for id_origen, id_destino in mapping.items():
+            por_destino[id_destino].append(id_origen)
+
+        total_productos = 0
+        for id_destino, ids_origen in por_destino.items():
+            self.env.cr.execute(
+                "UPDATE product_template SET categ_id = %s WHERE categ_id = ANY(%s)",
+                (id_destino, ids_origen),
+            )
+            total_productos += self.env.cr.rowcount
+        self.env['product.template'].invalidate_model(['categ_id'])
+
+        # — Eliminar categorías vacías y sin hijos, fuera de la jerarquía (bottom-up) —
+        ids_excluir = list(ids_validas)
+        cats_eliminadas = 0
+        while True:
+            self.env.cr.execute("""
+                DELETE FROM product_category
+                WHERE id != ALL(%s)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM product_template pt WHERE pt.categ_id = product_category.id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM product_category child WHERE child.parent_id = product_category.id
+                  )
+            """, (ids_excluir,))
+            n = self.env.cr.rowcount
+            cats_eliminadas += n
+            if n == 0:
+                break
+        self.env['product.category'].invalidate_model()
+
+        # — Bitácora y notificación —
+        resumen = (
+            f'{total_productos} productos migrados. '
+            f'{mapeadas} categorías mapeadas a equivalente existente, '
+            f'{a_varios} movidas a {cat_raiz.name}/Varios. '
+            f'{cats_eliminadas} categorías obsoletas eliminadas.'
+        )
+        self._registrar_log(descripcion=resumen, tipo_operacion='Homologar Categorías')
+        _logger.info('Syscom homologar_categorias: %s', resumen)
+
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Homologación de categorías completada',
+                'message': resumen,
+                'type': 'success',
+                'sticky': True,
+            },
+        }
 
     def _get_or_create_category_from_parts(self, lst_categorias, categoria_cache=None):
         """Obtener o crear categoría desde lista de partes ya separadas.

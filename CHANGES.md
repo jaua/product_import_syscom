@@ -1,5 +1,16 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-06-19 (revisión 8)
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 54 | `models/syscom_config.py` | `_clasificar_syscom_product`: detección de categoría raíz ahora prioriza el nombre según el idioma del usuario ejecutor — "Todos" para `es_*`, "All" para otros; fallback a cualquier categoría con `parent_id=False`. El idioma se registra en el log para diagnóstico |
+| 55 | `models/syscom_config.py`, `views/syscom_config_views.xml` | Nuevo método `homologar_categorias` + botón "Homologar Categorías" en el header del formulario. Migra todos los productos cuya categoría esté fuera de la jerarquía Todos/All: busca equivalente por nombre normalizado (sin acentos, case-insensitive); si no existe, crea `Todos/All/Varios/{nombre}`. Actualiza productos en SQL batch por grupo de destino, luego elimina categorías vacías bottom-up iterativo. Registra resumen en `syscom.log` y muestra notificación con totales |
+
+---
+
 ## [Pendiente de versión] — 2026-06-17 (revisión 7)
 
 ### Bugs corregidos
