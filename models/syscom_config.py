@@ -58,6 +58,10 @@ class SyscomConfig(models.Model):
         required=True,
         help='Tiempo entre descargas automáticas en segundos'
     )
+    # TODO: pendiente de revisión — este campo no se lee en ningún lugar del código.
+    # El cron (data/ir_cron_data.xml) corre con interval_number=1 days fijo,
+    # ignorando la hora configurada aquí por el usuario. Hay que decidir si se
+    # elimina el campo o se usa para calcular el `nextcall` del cron.
     hora_ejecucion = fields.Float(
         string='Hora de ejecución',
         default=2.0,

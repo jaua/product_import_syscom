@@ -1,5 +1,7 @@
 from odoo import models, fields, api
 
+# Tabla de almacenamiento de la información en el csv que se importa
+# no todos los campos, pero los que nos interesan.
 
 class ProductProviderSyscom(models.Model):
     _name = "product.provider.syscom"

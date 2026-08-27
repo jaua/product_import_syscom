@@ -8,10 +8,12 @@ class ProductTemplate(models.Model):
         string='URL referencia',
         help='Enlace del producto en el sitio web del proveedor.',
     )
+    
     product_url_image = fields.Text(
         string='URL Imagen',
         help='Enlace a la imagen del producto en el sitio web del proveedor.',
     )
+    
     syscom_ids = fields.One2many(
         "product.provider.syscom",
         "product_tmpl_id",

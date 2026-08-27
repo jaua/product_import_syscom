@@ -30,6 +30,10 @@
         <field name="model_id" ref="product.model_product_template"/>
         <field name="binding_model_id" ref="product.model_product_template"/>
         <field name="binding_view_types">list</field>
+        <!-- Restringido a administradores: syscom.log/product.provider.syscom
+             solo son escribibles/legibles por base.group_system; un usuario normal
+             que dispare esta acción recibiría un AccessError. -->
+        <field name="groups_id" eval="[(6, 0, [ref('base.group_system')])]"/>
         <field name="state">code</field>
         <field name="code">
 if records:

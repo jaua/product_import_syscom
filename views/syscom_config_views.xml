@@ -6,15 +6,20 @@
         <field name="arch" type="xml">
             <form string="Configuración Syscom">
                 <header>
+                    <!-- Restringido a administradores: syscom.log/product.provider.syscom
+                         solo son escribibles/legibles por base.group_system; un usuario
+                         normal que use este botón recibiría un AccessError. -->
                     <button name="ejecutar_importacion"
                             string="Ejecutar Importación"
                             type="object"
                             class="oe_highlight"
-                            icon="fa-play"/>
+                            icon="fa-play"
+                            groups="base.group_system"/>
                     <button name="homologar_categorias"
                             string="Homologar Categorías"
                             type="object"
                             icon="fa-sitemap"
+                            groups="base.group_system"
                             confirm="Esto migrará las categorías de TODOS los productos a la jerarquía Todos/All y eliminará las categorías obsoletas. ¿Continuar?"/>
                 </header>
                 <sheet>

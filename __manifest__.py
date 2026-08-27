@@ -15,7 +15,8 @@
     """,
     'author': 'JAUA SyTI',
     'website': 'https://app.jauamx.com',
-    'depends': ['base', 'product', 'purchase'],
+    'depends': ['base', 'product', 'purchase', 'sale', 'cdfi_invoice'],
+    'license': 'LGPL-3',
     'data': [
         'security/ir.model.access.csv',
         'views/syscom_config_views.xml',
