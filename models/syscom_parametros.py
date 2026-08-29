@@ -5,12 +5,14 @@ class SyscomParametros():
     _archivo_csv_prefijo = "syscom_products_"
     _archivo_csv_extension = ".csv"
     _archivo_bitacora_precios = f"{_ruta_descarga}/syscom_precios_bitacora.txt"
+    _archivo_bitacora_max_tamm = 100 # Tamannio en MB
+    _archivo_bitacora_max_vers = 5
     _usar_bitacora_precios = True
     _tiempo_espera_descarga = 300
     _periodo_actualizaciones = 5
     _id_objetoimp = "02"
     _id_cat_unidad_medida = 1
-    _categoria_separador = ' \ '
+    _categoria_separador = r' \ '
     _registros_por_batch = 2000
     _mxn_valor = 1.0
     _digitos_redondeo = 2
@@ -27,8 +29,6 @@ class SyscomParametros():
     _actualizar_url_imagen = True # pendiente: toggle para omitir actualización de imagen
     _actualizar_obsoleto = True   # pendiente: toggle para marcar productos sin stock como obsoletos
     _crear_productos_nuevos = True # pendiente: toggle para omitir creación de productos nuevos
-    _archivo_prueba = f"{_ruta_descarga}/verifica.txt"  # pendiente: verificación de conectividad
-    _categoria_separador = ' \ '  # pendiente: separador de jerarquía de categorías en UI
 
     def __init__(self):
         # Atributo de instancia: su valor varía por ejecución y no debe ser compartido entre instancias

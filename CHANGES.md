@@ -1,5 +1,27 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-08-29 (revisión 9)
+
+### Bugs corregidos
+
+| #  | Archivo | Descripción | Gravedad |
+|----|---------|-------------|----------|
+| 56 | `models/syscom_config.py` | `bitacora_limpiar_revisar`: el archivo de bitácora de precios nunca se truncaba tras comprimirse a `.zip`, por lo que la "rotación" no rotaba nada y se re-comprimía un archivo cada vez más grande en cada importación | Alta |
+| 57 | `models/syscom_config.py` | `bitacora_limpiar_revisar`: `contar_archivos_patron`/`obtener_primer_archivo` recibían la ruta absoluta completa como patrón (en vez del basename), generando una ruta duplicada inválida que nunca coincidía con ningún archivo real — el conteo de versiones nunca disparaba la limpieza | Alta |
+| 58 | `models/syscom_config.py` | `bitacora_limpiar_revisar`: `os.path.join` recibía el objeto función `obtener_primer_archivo` en vez de la variable con el resultado — lanzaba `TypeError` siempre y ningún `.zip` viejo llegaba a borrarse | Alta |
+| 59 | `models/syscom_config.py` | `bitacora_limpiar_revisar`: llamadas a `_logger.info`/`_logger.error` con dos f-strings como argumentos posicionales separados generaban errores internos de logging en vez de mostrar el mensaje esperado | Media |
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 60 | `models/syscom_config.py` | `bitacora_limpiar_revisar`: agregado guard de archivo inexistente (evita `FileNotFoundError` en la primera ejecución); el límite de versiones ahora se aplica en `while` en vez de `if` (corrige el invariante en una sola corrida si se acumularon más archivos de los permitidos); eliminado `pass` sobrante |
+| 61 | `models/product_template.py`, `models/syscom_config.py` | `product_url_ref`/`product_url_image` en `product.template` dejan de almacenarse directamente y pasan a ser campos computados desde `product.provider.syscom` (fuente única de verdad), eliminando la escritura duplicada del mismo dato en dos modelos durante la importación |
+| 62 | `models/syscom_config.py` | `_actualizar_syscom_provider_sql_batch`: al actualizar `product.provider.syscom` vía SQL directo (sin pasar por el ORM), se invalida explícitamente la caché de `product_url_ref`/`product_url_image` en `product.template`, ya que su recompute automático no se dispara con SQL crudo |
+| 63 | `security/ir.model.access.csv` | Nuevo acceso de solo lectura para `base.group_user` en `product.provider.syscom`: necesario porque el campo computado de `product.template` (visible para cualquier usuario) ahora lee ese modelo, que antes solo tenía acceso para `base.group_system` |
+
+---
+
 ## [Pendiente de versión] — 2026-06-19 (revisión 8)
 
 ### Mejoras de comportamiento

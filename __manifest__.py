@@ -4,7 +4,7 @@
 {
     'name': 'Syscom Importador de productos',
     'version': '1.0.6',
-    'category': 'Purchases',
+    'category': 'Sales',
     'summary': 'Importación automática de productos desde Syscom',
     'description': """
         Módulo para la importación automática de productos desde el proveedor Syscom.

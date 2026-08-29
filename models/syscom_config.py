@@ -10,6 +10,9 @@ from .syscom_parametros import SyscomParametros as Parametros
 import requests
 import csv
 import os
+import zipfile
+import glob
+import re
 import logging
 import shutil
 from psycopg2.errors import UniqueViolation
@@ -40,6 +43,121 @@ def registrar_bitacora_precios(mensaje):
             f.write(f'[{timestamp}] {mensaje}\n')
     except Exception as e:
         _logger.error(f'Error al registrar en bitácora de precios: {str(e)}')
+
+def comprimir_archivo_zip(ruta_origen, ruta_destino=None):
+    """Comprime un archivo usando zipfile (solo stdlib de Python)."""
+    if ruta_destino is None:
+        ruta_destino = ruta_origen + ".zip"
+
+    with zipfile.ZipFile(ruta_destino, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        zf.write(ruta_origen, arcname=os.path.basename(ruta_origen))
+
+    return ruta_destino
+
+def contar_archivos_patron(directorio, patron="archivos_*.zip"):
+    """Cuenta archivos que coincidan con un patrón tipo glob."""
+    ruta_patron = f"{directorio.rstrip('/')}/{patron}"
+    archivos = glob.glob(ruta_patron)
+    return len(archivos)
+
+def obtener_primer_archivo(directorio, patron_nombre, formato_fecha="%d%m%Y%H%M%S"):
+    """Devuelve el archivo más antiguo en `directorio` que coincida con `patron_nombre`,
+    ordenado por la fecha embebida en el nombre (no alfabéticamente).
+
+    :param directorio: carpeta donde buscar.
+    :param patron_nombre: patrón con {fecha} como placeholder de la parte de fecha.
+                           Ej: "archivos_{fecha}.zip"
+    :param formato_fecha: formato strptime de la parte {fecha}. Ej: "%d%m%Y%H%M%S"
+    :return: nombre del archivo más antiguo, o None si no hay coincidencias.
+    """
+    # Construye el regex a partir del patrón, escapando todo lo literal
+    # y reemplazando {fecha} por un grupo capturable de longitud variable.
+    partes = patron_nombre.split("{fecha}")
+    if len(partes) != 2:
+        raise ValueError("patron_nombre debe contener exactamente un {fecha}")
+
+    prefijo_regex = re.escape(partes[0])
+    sufijo_regex = re.escape(partes[1])
+    regex = re.compile(f"^{prefijo_regex}(.+?){sufijo_regex}$")
+
+    candidatos = []
+
+    for nombre in os.listdir(directorio):
+        match = regex.match(nombre)
+        if match:
+            timestamp_str = match.group(1)
+            try:
+                fecha = datetime.strptime(timestamp_str, formato_fecha)
+                candidatos.append((fecha, nombre))
+            except ValueError:
+                continue  # coincide el patrón pero la fecha no es válida
+
+    if not candidatos:
+        return None
+
+    return min(candidatos, key=lambda x: x[0])[1]
+
+def bitacora_limpiar_revisar():
+    """Revisa los límites de volumen del histórico de bitácoras: cuando el
+    archivo de bitácora de precios supera el tamaño máximo configurado, se
+    comprime a un .zip y se trunca el original para que vuelva a crecer
+    desde cero. Solo se conservan hasta `_archivo_bitacora_max_vers` de
+    estos .zip históricos (los más antiguos se eliminan), límites
+    definidos en syscom_parametros.py.
+    """
+    try:
+        if not os.path.exists(var._archivo_bitacora_precios):
+            return
+
+        max_size_bytes = var._archivo_bitacora_max_tamm * 1024 * 1024
+        archivo_tamano = os.path.getsize(var._archivo_bitacora_precios)
+
+        if archivo_tamano > max_size_bytes:
+            version_archivo = datetime.now().strftime("%d%m%Y%H%M%S")
+            archivo_comprimido = f"{var._archivo_bitacora_precios}_{version_archivo}.zip"
+
+            if var._logger_info:
+                _logger.info(
+                    "Archivo de bitácora (%.2f MB) excede el tamaño máximo (%.2f MB); comprimiendo a %s",
+                    archivo_tamano / (1024 * 1024),
+                    max_size_bytes / (1024 * 1024),
+                    archivo_comprimido,
+                )
+            comprimir_archivo_zip(var._archivo_bitacora_precios, archivo_comprimido)
+            # BUG corregido: antes el archivo original nunca se truncaba tras
+            # comprimirlo, así que la "rotación" no rotaba nada — se
+            # re-comprimía el mismo archivo, cada vez más grande, en cada
+            # importación, sin que el original dejara de crecer.
+            open(var._archivo_bitacora_precios, 'w').close()
+
+        # BUG corregido: _archivo_bitacora_precios ya es una ruta absoluta;
+        # pasarla completa como patrón a contar_archivos_patron/obtener_primer_archivo
+        # (que anteponen el directorio ellos mismos) generaba una ruta duplicada
+        # inválida que nunca coincidía con ningún archivo real. Se usa el
+        # basename para construir los patrones correctamente.
+        patron_basename = os.path.basename(var._archivo_bitacora_precios)
+        patron_glob = f"{patron_basename}_*.zip"
+        patron_nombre = f"{patron_basename}_{{fecha}}.zip"
+
+        while contar_archivos_patron(var._ruta_descarga, patron_glob) > var._archivo_bitacora_max_vers:
+            primer_archivo = obtener_primer_archivo(
+                var._ruta_descarga,
+                patron_nombre=patron_nombre,
+                formato_fecha="%d%m%Y%H%M%S",
+            )
+            if not primer_archivo:
+                break
+            # BUG corregido: se pasaba el objeto función `obtener_primer_archivo`
+            # en vez de la variable `primer_archivo` con el nombre de archivo
+            # resultante — os.path.join lanzaba TypeError siempre y ningún
+            # archivo viejo llegaba a borrarse.
+            ruta_completa = os.path.join(var._ruta_descarga, primer_archivo)
+            os.remove(ruta_completa)
+            if var._logger_info:
+                _logger.info('Bitácora histórica eliminada por límite de versiones: %s', ruta_completa)
+
+    except Exception as e:
+        _logger.error('Error al acceder a los archivos de bitácora de precios: %s', str(e), exc_info=True)
 
 
 class SyscomConfig(models.Model):
@@ -497,6 +615,8 @@ class SyscomConfig(models.Model):
                 ruta_archivo_csv, tipo_cambio_csv,
                 productos_procesados, productos_creados, productos_actualizados,
             )
+            # Revisar la generacion de las bitacoras
+            bitacora_limpiar_revisar()
         except Exception as e:
             _logger.error(f'Error procesando CSV: {str(e)}')
             raise UserError(f'Error al procesar el archivo CSV: {str(e)}')
@@ -737,11 +857,9 @@ class SyscomConfig(models.Model):
                     # MEJORA-38: categ_id incluido para mantener la categoría sincronizada
                     # con Syscom en cada importación (antes solo se asignaba al crear).
                     'categ_id': categoria.id if categoria else False,
-                    # Estos deberian de ser campos personalizados en el modelo
-                    #  supplierinfo o en un modelo relacionado, no en
-                    # product.template directamente, ajustar según corresponda
-                    'product_url_ref': linea_datos.get('syscom_url'),
-                    'product_url_image': linea_datos.get('syscom_url_imagen'),
+                    # product_url_ref / product_url_image ya no se escriben aquí: son
+                    # campos computados en product.template desde product.provider.syscom
+                    # (ver _clasificar_syscom_provider / models/product_template.py).
                     'product_brand_id': linea_datos.get('product_brand_id'),
                 }
             else:
@@ -758,8 +876,6 @@ class SyscomConfig(models.Model):
                     'cat_unidad_medida': linea_datos['cat_unidad_medida'],
                     'clave_producto': linea_datos['clave_producto'],
                     'objetoimp': linea_datos['objetoimp'],
-                    'product_url_ref': linea_datos.get('syscom_url'),
-                    'product_url_image': linea_datos.get('syscom_url_imagen'),
                     'product_brand_id': linea_datos.get('product_brand_id'),
                 })
             productos_procesados += 1
@@ -956,9 +1072,10 @@ class SyscomConfig(models.Model):
     def _actualizar_productos_sql_batch(self, productos_actualizar) -> int:
         """Actualiza productos existentes usando SQL batch para campos numéricos/char directos.
 
-        Campos via SQL (no traducibles, no JSONB): list_price, product_url_ref,
-            product_url_image, product_brand_id.
+        Campos via SQL (no traducibles, no JSONB): list_price, product_brand_id.
         Campos via ORM agrupado: name (JSONB traducible), standard_price (price.history).
+        product_url_ref / product_url_image ya no se escriben aquí: son campos
+        computados desde product.provider.syscom (ver models/product_template.py).
 
         Args:
             productos_actualizar (dict): Diccionario {product_template_id: values}.
@@ -987,8 +1104,6 @@ class SyscomConfig(models.Model):
             rows_template = [
                 (
                     vals['list_price'],
-                    vals.get('product_url_ref'),
-                    vals.get('product_url_image'),
                     vals.get('product_brand_id'),
                     vals.get('categ_id') or None,
                     product_id,
@@ -996,8 +1111,7 @@ class SyscomConfig(models.Model):
                 for product_id, vals in productos_actualizar.items()
             ]
             sql = """UPDATE product_template
-                        SET list_price=%s, product_url_ref=%s,
-                            product_url_image=%s, product_brand_id=%s,
+                        SET list_price=%s, product_brand_id=%s,
                             categ_id=COALESCE(%s, categ_id)
                       WHERE id=%s"""
             procesados_sql = 0
@@ -1046,8 +1160,7 @@ class SyscomConfig(models.Model):
             # Invalidar caché del ORM
             ids = list(productos_actualizar.keys())
             self.env['product.template'].browse(ids).invalidate_recordset([
-                'name', 'list_price', 'standard_price',
-                'product_url_ref', 'product_url_image', 'product_brand_id',
+                'name', 'list_price', 'standard_price', 'product_brand_id',
             ])
 
             if var._logger_info:
@@ -1152,9 +1265,17 @@ class SyscomConfig(models.Model):
                         procesados / total * 100, procesados, total, _elapsed(),
                     )
             ids = list(productos_actualizar.keys())
-            self.env['product.provider.syscom'].browse(ids).invalidate_recordset([
+            providers = self.env['product.provider.syscom'].browse(ids)
+            providers.invalidate_recordset([
                 'syscom_inventory', 'syscom_url', 'syscom_url_imagen', 'last_update',
             ])
+            # product.template.product_url_ref/product_url_image son campos
+            # computados desde estos registros; el UPDATE anterior fue SQL directo
+            # (sin pasar por el ORM), así que su caché no se invalida sola —
+            # se fuerza aquí para que la próxima lectura recalcule el valor correcto.
+            templates = providers.product_tmpl_id
+            if templates:
+                templates.invalidate_recordset(['product_url_ref', 'product_url_image'])
             if var._logger_info:
                 _logger.info(
                     'syscom_provider_sql_batch — completado total=%d elapsed=%.1fs',
