@@ -7,6 +7,7 @@ from odoo.exceptions import UserError
 from datetime import datetime, timedelta
 from .csv_utilerias import normaliza_csv
 from .bitacora_precios import registrar_bitacora_precios, bitacora_limpiar_revisar
+from .logging_utils import FuncNameFilter
 from .syscom_parametros import SyscomParametros as Parametros
 import requests
 import csv
@@ -17,19 +18,18 @@ from psycopg2.errors import UniqueViolation
 
 var = Parametros()
 _logger = logging.getLogger(__name__)
+_logger.addFilter(FuncNameFilter())
 
 # BUG-52: clave fija para pg_try_advisory_xact_lock — evita ejecuciones concurrentes
 _SYSCOM_LOCK_KEY = 0x53595343  # "SYSC"
 
 
-class _FuncNameFilter(logging.Filter):
-    def filter(self, record):
-        if var._logger_funcname:
-            record.msg = f'[{record.funcName}] {record.msg}'
-        return True
-
-
-_logger.addFilter(_FuncNameFilter())
+def _segundos_desde(inicio) -> float:
+    """Segundos transcurridos desde `inicio` (datetime.now()). Antes repetida
+    como closure `_elapsed()` idéntica en cada método de actualización batch
+    (_actualizar_productos_individual, _actualizar_productos_sql_batch,
+    _actualizar_syscom_provider_individual, _actualizar_syscom_provider_sql_batch)."""
+    return (datetime.now() - inicio).total_seconds()
 
 
 class SyscomConfig(models.Model):
@@ -964,9 +964,6 @@ class SyscomConfig(models.Model):
         total = len(productos_actualizar)
         inicio = datetime.now()
 
-        def _elapsed():
-            return (datetime.now() - inicio).total_seconds()
-
         if var._logger_info:
             _logger.info('productos_individual — inicio total=%d', total)
 
@@ -977,7 +974,7 @@ class SyscomConfig(models.Model):
             if var._logger_info and (count % var._registros_por_batch == 0 or count == total):
                 _logger.info(
                     'productos_individual pct=%.1f%% registros=%d/%d elapsed=%.1fs',
-                    count / total * 100, count, total, _elapsed(),
+                    count / total * 100, count, total, _segundos_desde(inicio),
                 )
             if not var._usar_bitacora_precios:
                 continue
@@ -991,7 +988,7 @@ class SyscomConfig(models.Model):
         if var._logger_info:
             _logger.info(
                 'productos_individual — completado total=%d elapsed=%.1fs',
-                total, _elapsed(),
+                total, _segundos_desde(inicio),
             )
         return total
 
@@ -1017,9 +1014,6 @@ class SyscomConfig(models.Model):
         total = len(productos_actualizar)
         chunk_size = var._registros_por_batch
         inicio = datetime.now()
-
-        def _elapsed():
-            return (datetime.now() - inicio).total_seconds()
 
         if var._logger_info:
             _logger.info('sql_batch — inicio total=%d chunk_size=%d', total, chunk_size)
@@ -1048,7 +1042,7 @@ class SyscomConfig(models.Model):
                 if var._logger_info:
                     _logger.info(
                         'sql_batch fase=SQL pct=%.1f%% registros=%d/%d elapsed=%.1fs',
-                        procesados_sql / total * 100, procesados_sql, total, _elapsed(),
+                        procesados_sql / total * 100, procesados_sql, total, _segundos_desde(inicio),
                     )
 
             # Fase 2: name — JSONB traducible, via ORM agrupado por valor
@@ -1064,7 +1058,7 @@ class SyscomConfig(models.Model):
                 if var._logger_info and (procesados_name % chunk_size == 0 or procesados_name == total):
                     _logger.info(
                         'sql_batch fase=name pct=%.1f%% registros=%d/%d elapsed=%.1fs',
-                        procesados_name / total * 100, procesados_name, total, _elapsed(),
+                        procesados_name / total * 100, procesados_name, total, _segundos_desde(inicio),
                     )
 
             # Fase 3: standard_price — via ORM para mantener product.price.history
@@ -1080,7 +1074,7 @@ class SyscomConfig(models.Model):
                 if var._logger_info and (procesados_precio % chunk_size == 0 or procesados_precio == total):
                     _logger.info(
                         'sql_batch fase=standard_price pct=%.1f%% registros=%d/%d elapsed=%.1fs',
-                        procesados_precio / total * 100, procesados_precio, total, _elapsed(),
+                        procesados_precio / total * 100, procesados_precio, total, _segundos_desde(inicio),
                     )
 
             # Invalidar caché del ORM
@@ -1092,11 +1086,11 @@ class SyscomConfig(models.Model):
             if var._logger_info:
                 _logger.info(
                     'sql_batch — completado total=%d elapsed=%.1fs',
-                    total, _elapsed(),
+                    total, _segundos_desde(inicio),
                 )
         except Exception as e:
             _logger.error(
-                'sql_batch — error elapsed=%.1fs: %s', _elapsed(), e, exc_info=True,
+                'sql_batch — error elapsed=%.1fs: %s', _segundos_desde(inicio), e, exc_info=True,
             )
             if var._logger_info:
                 _logger.info('sql_batch — fallback a actualización individual')
@@ -1117,9 +1111,6 @@ class SyscomConfig(models.Model):
         total = len(productos_actualizar)
         inicio = datetime.now()
 
-        def _elapsed():
-            return (datetime.now() - inicio).total_seconds()
-
         if var._logger_info:
             _logger.info('syscom_provider_individual — inicio total=%d', total)
 
@@ -1130,13 +1121,13 @@ class SyscomConfig(models.Model):
             if var._logger_info and (count % var._registros_por_batch == 0 or count == total):
                 _logger.info(
                     'syscom_provider_individual pct=%.1f%% registros=%d/%d elapsed=%.1fs',
-                    count / total * 100, count, total, _elapsed(),
+                    count / total * 100, count, total, _segundos_desde(inicio),
                 )
 
         if var._logger_info:
             _logger.info(
                 'syscom_provider_individual — completado total=%d elapsed=%.1fs',
-                total, _elapsed(),
+                total, _segundos_desde(inicio),
             )
         return total
 
@@ -1157,9 +1148,6 @@ class SyscomConfig(models.Model):
         total = len(productos_actualizar)
         chunk_size = var._registros_por_batch
         inicio = datetime.now()
-
-        def _elapsed():
-            return (datetime.now() - inicio).total_seconds()
 
         if var._logger_info:
             _logger.info('syscom_provider_sql_batch — inicio total=%d chunk_size=%d', total, chunk_size)
@@ -1189,7 +1177,7 @@ class SyscomConfig(models.Model):
                 if var._logger_info:
                     _logger.info(
                         'syscom_provider_sql_batch pct=%.1f%% registros=%d/%d elapsed=%.1fs',
-                        procesados / total * 100, procesados, total, _elapsed(),
+                        procesados / total * 100, procesados, total, _segundos_desde(inicio),
                     )
             ids = list(productos_actualizar.keys())
             providers = self.env['product.provider.syscom'].browse(ids)
@@ -1206,7 +1194,7 @@ class SyscomConfig(models.Model):
             if var._logger_info:
                 _logger.info(
                     'syscom_provider_sql_batch — completado total=%d elapsed=%.1fs',
-                    total, _elapsed(),
+                    total, _segundos_desde(inicio),
                 )
         except Exception as e:
             _logger.error('syscom_provider_sql_batch — error: %s', e, exc_info=True)

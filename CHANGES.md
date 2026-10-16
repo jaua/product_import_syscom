@@ -1,5 +1,14 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-10-16 (revisión 13)
+
+### Reestructuración
+
+| Archivo | Descripción |
+|---------|-------------|
+| `models/logging_utils.py` (nuevo), `models/syscom_config.py`, `models/csv_utilerias.py`, `models/bitacora_precios.py` | `_FuncNameFilter` (antepone `[nombre_función]` a cada log) se movió de `syscom_config.py` a su propio archivo como `FuncNameFilter`, evitando el import circular que impedía reusarlo. Se aplica ahora también en `csv_utilerias.py` y `bitacora_precios.py`, que antes registraban sus propios `_logger` sin el filtro — sus mensajes no llevaban el prefijo `[función]` que sí tenía el resto del módulo |
+| `models/syscom_config.py` | `_elapsed()`: closure idéntica de 2 líneas duplicada en 4 métodos de actualización batch (`_actualizar_productos_individual`, `_actualizar_productos_sql_batch`, `_actualizar_syscom_provider_individual`, `_actualizar_syscom_provider_sql_batch`). Consolidada en una única función de módulo `_segundos_desde(inicio)`. Sin cambios de comportamiento |
+
 ## [Pendiente de versión] — 2026-10-16 (revisión 12)
 
 ### Reestructuración

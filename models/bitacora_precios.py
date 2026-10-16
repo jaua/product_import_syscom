@@ -8,6 +8,7 @@ dependencias del ORM de Odoo — extraído de syscom_config.py para separar
 esta responsabilidad de utilería de archivos del modelo syscom.config.
 """
 from datetime import datetime
+from .logging_utils import FuncNameFilter
 from .syscom_parametros import SyscomParametros as Parametros
 import glob
 import logging
@@ -16,6 +17,7 @@ import re
 import zipfile
 
 _logger = logging.getLogger(__name__)
+_logger.addFilter(FuncNameFilter())
 var = Parametros()
 
 
