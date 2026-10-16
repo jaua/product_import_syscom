@@ -1,5 +1,13 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-10-16 (revisión 11)
+
+### Bugs corregidos
+
+| #  | Archivo | Descripción | Gravedad |
+|----|---------|-------------|----------|
+| 66 | `models/syscom_config.py` | `hora_ejecucion` era un campo decorativo: nada en el código lo leía y el cron (`interval_number=1 days`) ignoraba por completo la hora configurada en la UI. Se agregan overrides de `write`/`create` que, al cambiar `hora_ejecucion`, recalculan `nextcall` del cron a la próxima ocurrencia de esa hora (UTC) — hoy si aún no pasó, mañana en caso contrario. El intervalo diario (`interval_number`/`interval_type`) no se toca; Odoo sigue calculando los siguientes disparos sumándolo a partir de este `nextcall` re-anclado | Media |
+
 ## [Pendiente de versión] — 2026-10-16 (revisión 10)
 
 ### Mejoras de comportamiento
