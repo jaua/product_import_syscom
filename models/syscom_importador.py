@@ -14,6 +14,7 @@ from odoo.exceptions import UserError
 from datetime import datetime
 from .csv_utilerias import normaliza_csv
 from .bitacora_precios import registrar_bitacora_precios, bitacora_limpiar_revisar
+from .syscom_api import obtener_ficha_producto, formatear_descripcion_ecommerce
 from .logging_utils import FuncNameFilter
 from .syscom_parametros import SyscomParametros as Parametros
 import requests
@@ -440,6 +441,12 @@ class SyscomConfig(models.Model):
             # esta importación es 0. No publica automáticamente: la publicación de un
             # producto con existencia > 0 sigue siendo una decisión manual.
             self._actualizar_publicacion_web_batch(d_tmpl_existencia)
+
+            # Actualiza description_ecommerce (modelo + características) desde la
+            # API de ficha de producto de Syscom, solo para templates tocados en
+            # esta corrida que además estén publicados en la tienda web. Se omite
+            # por completo si no hay syscom_api_token configurado.
+            self._sincronizar_descripcion_ecommerce(d_tmpl_existencia.keys())
 
             productos_registrados = self._procesar_info_proveedor(
                 l_productos_crear_vals, d_productos_actualizar, datos_proveedor
@@ -1161,6 +1168,81 @@ class SyscomConfig(models.Model):
             for tmpl_id in tmpl_ids_sin_existencia:
                 templates.browse(tmpl_id).write({'is_published': False})
         return total
+
+    def _sincronizar_descripcion_ecommerce(self, tmpl_ids) -> int:
+        """Actualiza product.template.description_ecommerce con la ficha de
+        producto (modelo + características) obtenida de la API de detalle de
+        Syscom (https://developers.syscom.mx/api/v1/productos/{id}).
+
+        Solo considera los templates de `tmpl_ids` (típicamente
+        d_tmpl_existencia de esta misma corrida) que además estén publicados
+        en la tienda web en este momento (is_published=True) — no recorre
+        todo el catálogo publicado en cada ejecución, para limitar cuántas
+        llamadas HTTP hace esta importación.
+
+        Si no hay syscom_api_token configurado, se omite el paso completo sin
+        afectar el resto de la importación. Un fallo al consultar o escribir
+        un producto en particular (API caída, token inválido, 404, etc.) se
+        registra y se continúa con el resto — no aborta la importación.
+        Args:
+            tmpl_ids (iterable): ids de product.template a considerar.
+        Returns:
+            int: Número de templates cuya description_ecommerce se actualizó.
+        """
+        token = self.syscom_api_token
+        if not token:
+            if var._logger_info:
+                _logger.info('descripcion_ecommerce — omitido: no hay syscom_api_token configurado.')
+            return 0
+        tmpl_ids = list(tmpl_ids)
+        if not tmpl_ids:
+            return 0
+
+        templates_publicados = self.env['product.template'].search([
+            ('id', 'in', tmpl_ids),
+            ('is_published', '=', True),
+        ])
+        if not templates_publicados:
+            return 0
+
+        if var._logger_info:
+            _logger.info('descripcion_ecommerce — inicio total=%d', len(templates_publicados))
+
+        actualizados = 0
+        errores = 0
+        for template in templates_publicados:
+            info_syscom = template.syscom_ids[:1]
+            id_syscom = info_syscom.id_syscom if info_syscom else False
+            if not id_syscom:
+                continue
+            try:
+                ficha = obtener_ficha_producto(id_syscom, token)
+            except Exception as e:
+                errores += 1
+                _logger.warning(
+                    'descripcion_ecommerce — error al consultar ficha de producto_id=%s (template=%s): %s',
+                    id_syscom, template.id, e,
+                )
+                continue
+
+            html = formatear_descripcion_ecommerce(ficha.get('modelo'), ficha.get('caracteristicas'))
+            if not html:
+                continue
+            try:
+                template.write({'description_ecommerce': html})
+                actualizados += 1
+            except Exception as e:
+                errores += 1
+                _logger.warning(
+                    'descripcion_ecommerce — error al escribir template=%s: %s', template.id, e,
+                )
+
+        if var._logger_info:
+            _logger.info(
+                'descripcion_ecommerce — completado actualizados=%d errores=%d de %d',
+                actualizados, errores, len(templates_publicados),
+            )
+        return actualizados
 
     def _procesar_batch_creacion(self, productos_crear_vals) -> int:
         """Procesa la creación de nuevos productos en batch.

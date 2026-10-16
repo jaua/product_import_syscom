@@ -64,6 +64,17 @@ class SyscomConfig(models.Model):
         default=1.0,
         help='Último respaldo manual: se usa solo si el CSV no incluye tipo de cambio Y la moneda USD no está configurada en el sistema Odoo.'
     )
+    syscom_api_token = fields.Char(
+        string='Token API Syscom (Bearer)',
+        groups='base.group_system',
+        help='Token Bearer para la API de ficha de producto de Syscom '
+             '(https://developers.syscom.mx/api/v1/productos/{id}), usada al '
+             'final de la importación para actualizar description_ecommerce '
+             'de los productos publicados. Restringido a administradores '
+             '(groups=base.group_system) aunque base.group_user tenga lectura '
+             'sobre el resto de esta configuración. Si se deja vacío, se omite '
+             'ese paso sin afectar el resto de la importación.'
+    )
 
     @api.model
     def get_config(self):

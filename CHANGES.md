@@ -1,5 +1,13 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-10-16 (revisión 15)
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 67 | `models/syscom_api.py` (nuevo), `models/syscom_importador.py`, `models/syscom_config.py`, `views/syscom_config_views.xml` | Al final de cada importación, se actualiza `product.template.description_ecommerce` (campo de `website_sale`) con el `modelo` y `caracteristicas` obtenidos de la API de ficha de producto de Syscom (`developers.syscom.mx/api/v1/productos/{id}`), para los templates tocados en esa corrida que además estén publicados (`is_published=True`) en la tienda web. `syscom_api.py` aporta las funciones puras `obtener_ficha_producto`/`formatear_descripcion_ecommerce` (el token se recibe como parámetro, no se lee internamente). Nuevo campo `syscom_api_token` en `syscom.config`, restringido a `base.group_system` (`groups=` a nivel de campo, ya que `base.group_user` tiene lectura sobre el resto de la config) y oculto en la UI (`password="True"`). Si el token está vacío, el paso se omite sin afectar el resto de la importación; un fallo por producto (API caída, 404, token inválido) se registra y se continúa con el resto |
+
 ## [Pendiente de versión] — 2026-10-16 (revisión 14)
 
 ### Reestructuración
