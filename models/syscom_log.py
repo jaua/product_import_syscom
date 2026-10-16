@@ -42,4 +42,4 @@ class SyscomLog(models.Model):
     )
 
     # BUG-33: override de create eliminado — solo instanciaba Parametros() en cada
-    # registro para emitir un log. El log ya existe en _log_crear (syscom_config.py).
+    # registro para emitir un log. El log ya existe en _log_crear (syscom_importador.py).

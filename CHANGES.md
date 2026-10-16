@@ -1,5 +1,13 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-10-16 (revisión 14)
+
+### Reestructuración
+
+| Archivo | Descripción |
+|---------|-------------|
+| `models/syscom_importador.py` (nuevo), `models/syscom_config.py` | `syscom_config.py` quedaba mezclando dos responsabilidades: los campos de configuración y las ~1500 líneas del proceso de importación (descarga/limpieza de CSV, clasificación, actualización/creación en batch, despublicación web, bitácora, homologación de categorías). Se separan en dos archivos del mismo modelo ORM (`syscom.config`): `syscom_config.py` se queda solo con los 7 campos + `get_config`/`write`/`create`/`_actualizar_nextcall_cron` (ciclo de vida ligado a la config); `syscom_importador.py` extiende el modelo vía `_inherit = 'syscom.config'` con todo el proceso de importación. Sin cambios de comportamiento, vistas, seguridad ni cron — todo sigue siendo el mismo `_name`. `models/__init__.py` importa `syscom_importador` después de `syscom_config` |
+
 ## [Pendiente de versión] — 2026-10-16 (revisión 13)
 
 ### Reestructuración
