@@ -1,5 +1,13 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-10-16 (revisión 16)
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 68 | `models/syscom_api.py`, `models/syscom_importador.py`, `models/syscom_config.py`, `models/syscom_parametros.py`, `views/syscom_config_views.xml` | El Bearer token de la MEJORA-67 deja de ser un campo de `syscom.config` (`syscom_api_token`, eliminado junto con su vista) y pasa a leerse de un archivo plano en `/mnt/DATA/token.dat` (`var._ruta_token_bearer`, nuevo en `syscom_parametros.py`), montado vía volumen de Docker — así el token nunca queda almacenado en la base de datos. Nueva función pura `leer_token_bearer()` en `syscom_api.py`; si el archivo no existe o está vacío, se omite el paso sin afectar el resto de la importación (mismo comportamiento que antes con el campo vacío) |
+
 ## [Pendiente de versión] — 2026-10-16 (revisión 15)
 
 ### Mejoras de comportamiento

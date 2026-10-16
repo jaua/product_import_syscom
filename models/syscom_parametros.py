@@ -10,6 +10,10 @@ class SyscomParametros():
     _usar_bitacora_precios = True
     _tiempo_espera_descarga = 300
     _periodo_actualizaciones = 5
+    # Bearer token de la API de ficha de producto de Syscom (developers.syscom.mx).
+    # Archivo plano montado vía volumen de Docker, NO un campo de configuración en
+    # Odoo — así el token nunca queda almacenado en la base de datos.
+    _ruta_token_bearer = "/mnt/DATA/token.dat"
     _id_objetoimp = "02"
     _id_cat_unidad_medida = 1
     _categoria_separador = r' \ '

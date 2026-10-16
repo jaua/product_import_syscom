@@ -12,12 +12,33 @@ import html as html_lib
 import logging
 import requests
 from .logging_utils import FuncNameFilter
+from .syscom_parametros import SyscomParametros as Parametros
 
 _logger = logging.getLogger(__name__)
 _logger.addFilter(FuncNameFilter())
+var = Parametros()
 
 SYSCOM_API_PRODUCTOS_URL = 'https://developers.syscom.mx/api/v1/productos'
 _TIMEOUT_API_FICHA = 30  # segundos; igual orden que _TIMEOUT_DESCARGA_IMAGEN en product_syscom_update_image
+
+
+def leer_token_bearer(ruta=None) -> str:
+    """Lee el Bearer token de la API de Syscom desde un archivo plano —
+    por defecto var._ruta_token_bearer ("/mnt/DATA/token.dat"), montado vía
+    volumen de Docker. Deliberadamente NO se almacena en syscom.config: así
+    el token nunca queda en la base de datos ni es visible desde la UI.
+    Returns:
+        str: contenido del archivo sin espacios/saltos de línea al borde, o
+        '' si el archivo no existe o no se puede leer (se registra un
+        warning; el llamador decide si omitir el paso que lo necesita).
+    """
+    ruta = ruta or var._ruta_token_bearer
+    try:
+        with open(ruta, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError as e:
+        _logger.warning('No se pudo leer el token Bearer desde %s: %s', ruta, e)
+        return ''
 
 
 def obtener_ficha_producto(id_syscom, token, timeout=_TIMEOUT_API_FICHA) -> dict:

@@ -14,7 +14,7 @@ from odoo.exceptions import UserError
 from datetime import datetime
 from .csv_utilerias import normaliza_csv
 from .bitacora_precios import registrar_bitacora_precios, bitacora_limpiar_revisar
-from .syscom_api import obtener_ficha_producto, formatear_descripcion_ecommerce
+from .syscom_api import leer_token_bearer, obtener_ficha_producto, formatear_descripcion_ecommerce
 from .logging_utils import FuncNameFilter
 from .syscom_parametros import SyscomParametros as Parametros
 import requests
@@ -1180,19 +1180,26 @@ class SyscomConfig(models.Model):
         todo el catálogo publicado en cada ejecución, para limitar cuántas
         llamadas HTTP hace esta importación.
 
-        Si no hay syscom_api_token configurado, se omite el paso completo sin
-        afectar el resto de la importación. Un fallo al consultar o escribir
-        un producto en particular (API caída, token inválido, 404, etc.) se
-        registra y se continúa con el resto — no aborta la importación.
+        El Bearer token se lee de un archivo (var._ruta_token_bearer,
+        "/mnt/DATA/token.dat" por defecto, montado vía volumen de Docker) —
+        deliberadamente no es un campo de syscom.config, para que nunca quede
+        almacenado en la base de datos. Si el archivo no existe o está vacío,
+        se omite el paso completo sin afectar el resto de la importación. Un
+        fallo al consultar o escribir un producto en particular (API caída,
+        token inválido, 404, etc.) se registra y se continúa con el resto —
+        no aborta la importación.
         Args:
             tmpl_ids (iterable): ids de product.template a considerar.
         Returns:
             int: Número de templates cuya description_ecommerce se actualizó.
         """
-        token = self.syscom_api_token
+        token = leer_token_bearer()
         if not token:
             if var._logger_info:
-                _logger.info('descripcion_ecommerce — omitido: no hay syscom_api_token configurado.')
+                _logger.info(
+                    'descripcion_ecommerce — omitido: no se pudo obtener el token Bearer '
+                    '(ver %s).', var._ruta_token_bearer,
+                )
             return 0
         tmpl_ids = list(tmpl_ids)
         if not tmpl_ids:
