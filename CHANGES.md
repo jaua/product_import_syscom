@@ -1,6 +1,15 @@
 # Control de Cambios — Syscom Importador de Productos
 
-## [Pendiente de versión] — 2026-08-29 (revisión 9)
+## [Pendiente de versión] — 2026-10-16 (revisión 10)
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 64 | `models/product_provider_syscom.py`, `models/syscom_config.py` | Nuevo campo `es_kit` en `product.provider.syscom`, poblado desde la columna "Es Kit" del CSV de Syscom. Se escribe tanto en la creación (ORM) como en la actualización en batch (SQL directo) de registros de proveedor |
+| 65 | `models/syscom_config.py`, `__manifest__.py` | Nuevo método `_actualizar_publicacion_web_batch`: despublica de la tienda web (`is_published=False`) los `product.template` cuya existencia total reportada en el CSV de la importación actual es 0, sumando existencia entre todos sus registros de proveedor syscom (`d_tmpl_existencia`, devuelto por `_clasificar_syscom_provider`). Solo actúa sobre templates presentes en el CSV; nunca publica automáticamente — un template con existencia > 0 conserva su estado de publicación actual, ya que publicar sigue siendo decisión manual. Requiere la nueva dependencia `website_sale` (campo `is_published`) |
+
+
 
 ### Bugs corregidos
 

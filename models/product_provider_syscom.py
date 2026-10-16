@@ -54,9 +54,16 @@ class ProductProviderSyscom(models.Model):
         string="URL Imagen",
     )
 
+    # Cabezera: Existencias
     syscom_inventory = fields.Integer(
         string="Inventario Syscom",
         default=0,
+    )
+
+    # Cabezera: "Es Kit"
+    es_kit = fields.Boolean(
+        string="El Producto es un kit?",
+        default=False,
     )
 
     syscom_obsoleto = fields.Boolean(

@@ -602,11 +602,17 @@ class SyscomConfig(models.Model):
                 d_prod_syscom_actualizar,
                 l_prod_syscom_crear_vals,
                 prod_syscom_procesados,
+                d_tmpl_existencia,
             ) = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesados)
 
             # MEJORA-36: reemplazado actualización individual por SQL batch (equivalente al de product.template)
             provider_actualizados = self._actualizar_syscom_provider_sql_batch(d_prod_syscom_actualizar)
             provider_creados = self._procesar_batch_creacion_syscom_provider(l_prod_syscom_crear_vals)
+
+            # Despublica de la tienda web los productos cuya existencia reportada en
+            # esta importación es 0. No publica automáticamente: la publicación de un
+            # producto con existencia > 0 sigue siendo una decisión manual.
+            self._actualizar_publicacion_web_batch(d_tmpl_existencia)
 
             productos_registrados = self._procesar_info_proveedor(
                 l_productos_crear_vals, d_productos_actualizar, datos_proveedor
@@ -675,6 +681,7 @@ class SyscomConfig(models.Model):
                 syscom_url_imagen = fila_datos_csv.get('Imagen Principal', '').strip()
                 syscom_inventory = fila_datos_csv.get('Existencias', '0').strip()
                 precios = self._calcular_precios(su_precio, tipo_cambio_csv)
+                es_kit = fila_datos_csv.get('Es Kit', 'no').strip().lower() in ('si', 'sí', 'yes', 'true', '1')
 
                 if not precios:
                     _logger.warning(f'Precio inválido para producto {default_code}')
@@ -705,6 +712,7 @@ class SyscomConfig(models.Model):
                     'syscom_url': syscom_url,
                     'syscom_url_imagen': syscom_url_imagen,
                     'syscom_inventory': syscom_inventory,
+                    'es_kit': es_kit,
                     # 'syscom_obsoleto': syscom_obsoleto,
                 })
 
@@ -884,7 +892,7 @@ class SyscomConfig(models.Model):
     def _clasificar_syscom_provider(self, datos_syscom_proveedor=None, codigos_a_procesar=None) -> tuple:
         """Clasifica registros de proveedor Syscom en dos grupos: actualizar y crear.
         Returns:
-            tuple: (dict actualizar, list crear, int procesados)
+            tuple: (dict actualizar, list crear, int procesados, dict {product_tmpl_id: existencia_total})
         """
         if datos_syscom_proveedor is None:
             datos_syscom_proveedor = []
@@ -899,6 +907,7 @@ class SyscomConfig(models.Model):
         l_productos_crear_vals = []
         lista_DCode_IDSyscom = {}
         producto_template_default_code_id_map = {}
+        d_tmpl_existencia = {}
         contador_productos_procesados = 0
         contador_omitidos = 0
         productos_perdidos_duplicados = None
@@ -995,7 +1004,10 @@ class SyscomConfig(models.Model):
                         'syscom_inventory': syscom_inventory,
                         'syscom_url': ldatos.get('syscom_url'),
                         'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
+                        'es_kit': ldatos.get('es_kit'),
                     }
+                    tmpl_id = product.product_tmpl_id.id
+                    d_tmpl_existencia[tmpl_id] = d_tmpl_existencia.get(tmpl_id, 0) + syscom_inventory
                 else:
                     tmpl_id = producto_template_default_code_id_map.get(default_code)
                     if not tmpl_id:
@@ -1012,7 +1024,9 @@ class SyscomConfig(models.Model):
                         'syscom_inventory': syscom_inventory,
                         'syscom_url': ldatos.get('syscom_url'),
                         'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
+                        'es_kit': ldatos.get('es_kit'),
                     })
+                    d_tmpl_existencia[tmpl_id] = d_tmpl_existencia.get(tmpl_id, 0) + syscom_inventory
                 contador_productos_procesados += 1
         except Exception as e:
             _logger.error(f'Error al clasificar datos de proveedor Syscom: {e}', exc_info=True)
@@ -1023,7 +1037,7 @@ class SyscomConfig(models.Model):
                 '%d a actualizar, %d a crear, %d omitidos.',
                 contador_productos_procesados, len(d_productos_actualizar),
                 len(l_productos_crear_vals), contador_omitidos)
-        return d_productos_actualizar, l_productos_crear_vals, contador_productos_procesados
+        return d_productos_actualizar, l_productos_crear_vals, contador_productos_procesados, d_tmpl_existencia
 
     def _actualizar_productos_individual(self, productos_actualizar) -> int:
         """Actualiza productos existentes registro por registro.
@@ -1245,6 +1259,7 @@ class SyscomConfig(models.Model):
                     vals['syscom_inventory'],
                     vals.get('syscom_url'),
                     vals.get('syscom_url_imagen'),
+                    vals.get('es_kit'),
                     ahora,
                     record_id,
                 )
@@ -1252,7 +1267,7 @@ class SyscomConfig(models.Model):
             ]
             sql = """UPDATE product_provider_syscom
                         SET syscom_inventory=%s, syscom_url=%s,
-                            syscom_url_imagen=%s, last_update=%s
+                            syscom_url_imagen=%s, es_kit=%s, last_update=%s
                       WHERE id=%s"""
             procesados = 0
             for i in range(0, total, chunk_size):
@@ -1267,7 +1282,7 @@ class SyscomConfig(models.Model):
             ids = list(productos_actualizar.keys())
             providers = self.env['product.provider.syscom'].browse(ids)
             providers.invalidate_recordset([
-                'syscom_inventory', 'syscom_url', 'syscom_url_imagen', 'last_update',
+                'syscom_inventory', 'syscom_url', 'syscom_url_imagen', 'last_update', 'es_kit',
             ])
             # product.template.product_url_ref/product_url_image son campos
             # computados desde estos registros; el UPDATE anterior fue SQL directo
@@ -1286,6 +1301,50 @@ class SyscomConfig(models.Model):
             if var._logger_info:
                 _logger.info('syscom_provider_sql_batch — fallback a actualización individual')
             return self._actualizar_syscom_provider_individual(productos_actualizar)
+        return total
+
+    def _actualizar_publicacion_web_batch(self, existencia_por_template) -> int:
+        """Despublica en la tienda web (product.template.is_published=False) los
+        templates cuya existencia reportada en esta importación es 0. Nunca
+        publica automáticamente: un template con existencia > 0 no se toca y
+        conserva su estado de publicación actual (la publicación es una
+        decisión manual). Sólo se consideran los templates presentes en el
+        CSV de esta importación.
+        Args:
+            existencia_por_template (dict): {product_tmpl_id: existencia_total}
+        Returns:
+            int: Número de templates despublicados.
+        """
+        tmpl_ids_sin_existencia = [
+            tmpl_id for tmpl_id, existencia in existencia_por_template.items() if existencia <= 0
+        ]
+        if not tmpl_ids_sin_existencia:
+            return 0
+
+        total = len(tmpl_ids_sin_existencia)
+        chunk_size = var._registros_por_batch
+
+        if var._logger_info:
+            _logger.info('publicacion_web_sql_batch — inicio total=%d chunk_size=%d', total, chunk_size)
+
+        try:
+            rows = [(tmpl_id,) for tmpl_id in tmpl_ids_sin_existencia]
+            sql = "UPDATE product_template SET is_published=false WHERE id=%s"
+            for i in range(0, total, chunk_size):
+                chunk = rows[i:i + chunk_size]
+                self.env.cr.executemany(sql, chunk)
+            self.env['product.template'].browse(tmpl_ids_sin_existencia).invalidate_recordset(
+                ['is_published', 'website_published']
+            )
+            if var._logger_info:
+                _logger.info('publicacion_web_sql_batch — completado despublicados=%d', total)
+        except Exception as e:
+            _logger.error('publicacion_web_sql_batch — error: %s', e, exc_info=True)
+            if var._logger_info:
+                _logger.info('publicacion_web_sql_batch — fallback a actualización individual')
+            templates = self.env['product.template']
+            for tmpl_id in tmpl_ids_sin_existencia:
+                templates.browse(tmpl_id).write({'is_published': False})
         return total
 
     def _procesar_batch_creacion(self, productos_crear_vals) -> int:
