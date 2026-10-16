@@ -1,5 +1,13 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-10-16 (revisión 12)
+
+### Reestructuración
+
+| Archivo | Descripción |
+|---------|-------------|
+| `models/bitacora_precios.py` (nuevo), `models/syscom_config.py` | Las 5 funciones a nivel de módulo (fuera de `SyscomConfig`, sin dependencias del ORM) que implementaban la bitácora de precios y su rotación — `registrar_bitacora_precios`, `comprimir_archivo_zip`, `contar_archivos_patron`, `obtener_primer_archivo`, `bitacora_limpiar_revisar` — se movieron a `models/bitacora_precios.py`, mismo patrón ya usado para `csv_utilerias.py`/`normaliza_csv`. `syscom_config.py` las importa (`from .bitacora_precios import ...`); se eliminan los imports `zipfile`/`glob`/`re`, que ya no se usan ahí. Sin cambios de comportamiento |
+
 ## [Pendiente de versión] — 2026-10-16 (revisión 11)
 
 ### Bugs corregidos
