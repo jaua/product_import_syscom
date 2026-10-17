@@ -1,5 +1,13 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-10-17 (revisión 17)
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 69 | `models/product_provider_syscom.py`, `models/syscom_config.py`, `models/syscom_importador.py`, `views/syscom_config_views.xml` | Caso detectado: un producto que desaparece por completo del CSV de Syscom (no solo con existencia 0) se quedaba publicado para siempre — `_actualizar_publicacion_web_batch` solo considera templates presentes en el CSV de la corrida. Nuevo `_despublicar_productos_ausentes`: despublica templates cuyos `product.provider.syscom` lleven más de `dias_ausencia_maxima` días (nuevo campo en `syscom.config`, default 15) sin aparecer (`ultima_vez_visto`, nuevo campo, actualizado junto con `last_update` en el batch SQL). Se omite por completo si hay filtro de categorías activo (`categorias_importar`: un producto fuera del filtro nunca aparece en el CSV aunque siga vigente) o si no hay token Bearer disponible. Antes de despublicar se confirma contra la API de ficha de producto (revisión 15): solo un 404 explícito confirma descontinuación — un 200 o un fallo de red/token NO despublica, para que una caída prolongada del feed de Syscom no despublique el catálogo completo por un falso positivo masivo. Los `default_code` de cada caso quedan en el log |
+
 ## [Pendiente de versión] — 2026-10-16 (revisión 16)
 
 ### Mejoras de comportamiento

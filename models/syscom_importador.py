@@ -11,7 +11,7 @@ ambos archivos sigan siendo el mismo modelo ORM.
 """
 from odoo import models, fields, api
 from odoo.exceptions import UserError
-from datetime import datetime
+from datetime import datetime, timedelta
 from .csv_utilerias import normaliza_csv
 from .bitacora_precios import registrar_bitacora_precios, bitacora_limpiar_revisar
 from .syscom_api import leer_token_bearer, obtener_ficha_producto, formatear_descripcion_ecommerce
@@ -442,10 +442,16 @@ class SyscomConfig(models.Model):
             # producto con existencia > 0 sigue siendo una decisión manual.
             self._actualizar_publicacion_web_batch(d_tmpl_existencia)
 
+            # Despublica productos que llevan más de dias_ausencia_maxima días sin
+            # aparecer en el CSV (posible descontinuación) — distinto del caso
+            # anterior: ese producto ni siquiera está en los datos de esta corrida.
+            # Se omite si hay filtro de categorías activo (ver docstring del método).
+            self._despublicar_productos_ausentes()
+
             # Actualiza description_ecommerce (modelo + características) desde la
             # API de ficha de producto de Syscom, solo para templates tocados en
             # esta corrida que además estén publicados en la tienda web. Se omite
-            # por completo si no hay syscom_api_token configurado.
+            # por completo si no hay token Bearer disponible (ver leer_token_bearer).
             self._sincronizar_descripcion_ecommerce(d_tmpl_existencia.keys())
 
             productos_registrados = self._procesar_info_proveedor(
@@ -1058,7 +1064,9 @@ class SyscomConfig(models.Model):
         MEJORA-35: equivalente a _actualizar_productos_sql_batch pero para el modelo
         de proveedor Syscom. Todos los campos son columnas directas (no JSONB ni
         price.history), por lo que un solo UPDATE por chunk es suficiente.
-        Actualiza además last_update con la hora UTC de la ejecución.
+        Actualiza además last_update y ultima_vez_visto con la hora UTC de
+        la ejecución — este último confirma que el código apareció en el
+        CSV de esta corrida (ver _despublicar_productos_ausentes).
         Args:
             productos_actualizar (dict): {record_id: {syscom_inventory, syscom_url, syscom_url_imagen}}
         Returns:
@@ -1083,13 +1091,15 @@ class SyscomConfig(models.Model):
                     vals.get('syscom_url_imagen'),
                     vals.get('es_kit'),
                     ahora,
+                    ahora,
                     record_id,
                 )
                 for record_id, vals in productos_actualizar.items()
             ]
             sql = """UPDATE product_provider_syscom
                         SET syscom_inventory=%s, syscom_url=%s,
-                            syscom_url_imagen=%s, es_kit=%s, last_update=%s
+                            syscom_url_imagen=%s, es_kit=%s, last_update=%s,
+                            ultima_vez_visto=%s
                       WHERE id=%s"""
             procesados = 0
             for i in range(0, total, chunk_size):
@@ -1105,6 +1115,7 @@ class SyscomConfig(models.Model):
             providers = self.env['product.provider.syscom'].browse(ids)
             providers.invalidate_recordset([
                 'syscom_inventory', 'syscom_url', 'syscom_url_imagen', 'last_update', 'es_kit',
+                'ultima_vez_visto',
             ])
             # product.template.product_url_ref/product_url_image son campos
             # computados desde estos registros; el UPDATE anterior fue SQL directo
@@ -1168,6 +1179,127 @@ class SyscomConfig(models.Model):
             for tmpl_id in tmpl_ids_sin_existencia:
                 templates.browse(tmpl_id).write({'is_published': False})
         return total
+
+    def _despublicar_productos_ausentes(self) -> int:
+        """Despublica product.template cuyos registros de product.provider.syscom
+        lleven más de `dias_ausencia_maxima` días sin aparecer en el CSV de Syscom
+        (ultima_vez_visto) — a diferencia de _actualizar_publicacion_web_batch, este
+        caso es un producto que Syscom dejó de reportar por completo (posible
+        descontinuación), no uno presente con existencia 0.
+
+        Guards (para evitar despublicar por un falso positivo):
+          - Se omite por completo si hay un filtro de categorías activo
+            (categorias_importar): un producto fuera del filtro nunca aparece en
+            el CSV aunque Syscom siga vendiéndolo — no hay forma de distinguir
+            "descontinuado" de "fuera del filtro".
+          - Se omite si no hay token Bearer disponible (leer_token_bearer).
+          - Un template con varios product.provider.syscom solo se despublica si
+            NINGUNO fue visto recientemente (todos vencidos).
+          - Antes de despublicar se confirma contra la API de ficha de producto:
+            solo un 404 explícito confirma la descontinuación. Si la API
+            responde 200 (sigue existiendo) o la llamada falla (red, token
+            inválido, 5xx), NO se despublica — "no se pudo confirmar" nunca
+            cuenta como "confirmado ausente". Esto evita que una falla externa
+            prolongada del CSV (que haría que todo el catálogo cruce el umbral
+            de días a la vez) despublique el catálogo completo.
+        Returns:
+            int: Número de templates despublicados.
+        """
+        if self.categorias_importar:
+            if var._logger_info:
+                _logger.info(
+                    'despublicar_ausentes — omitido: hay un filtro de categorías activo '
+                    '(categorias_importar); no se puede distinguir descontinuado de '
+                    'fuera-de-filtro.'
+                )
+            return 0
+
+        token = leer_token_bearer()
+        if not token:
+            if var._logger_info:
+                _logger.info('despublicar_ausentes — omitido: no se pudo obtener el token Bearer.')
+            return 0
+
+        limite = fields.Datetime.now() - timedelta(days=self.dias_ausencia_maxima)
+
+        # Templates publicados cuyos registros de proveedor syscom están TODOS
+        # vencidos (ninguno visto en los últimos dias_ausencia_maxima días).
+        self.env.cr.execute("""
+            SELECT pts.product_tmpl_id
+              FROM product_provider_syscom pts
+              JOIN product_template pt ON pt.id = pts.product_tmpl_id
+             WHERE pt.is_published = true AND pts.active = true
+             GROUP BY pts.product_tmpl_id
+            HAVING COUNT(*) FILTER (
+                     WHERE pts.ultima_vez_visto IS NOT NULL AND pts.ultima_vez_visto >= %s
+                   ) = 0
+        """, (limite,))
+        tmpl_ids_candidatos = [row[0] for row in self.env.cr.fetchall()]
+        if not tmpl_ids_candidatos:
+            return 0
+
+        if var._logger_info:
+            _logger.info(
+                'despublicar_ausentes — candidatos con más de %d días de ausencia: total=%d',
+                self.dias_ausencia_maxima, len(tmpl_ids_candidatos),
+            )
+
+        tmpl_ids_a_despublicar = []
+        codigos_despublicados = []
+        for tmpl_id in tmpl_ids_candidatos:
+            providers = self.env['product.provider.syscom'].search([('product_tmpl_id', '=', tmpl_id)])
+            confirmado_descontinuado = True
+            for provider in providers:
+                try:
+                    obtener_ficha_producto(provider.id_syscom, token)
+                    # 200: la API todavía reconoce el producto -> no se despublica.
+                    confirmado_descontinuado = False
+                    if var._logger_info:
+                        _logger.info(
+                            'despublicar_ausentes — default_code=%s id_syscom=%s sigue existiendo '
+                            'según la API; no se despublica aunque falte del CSV.',
+                            provider.default_code, provider.id_syscom,
+                        )
+                    break
+                except requests.HTTPError as e:
+                    if e.response is not None and e.response.status_code == 404:
+                        if var._logger_info:
+                            _logger.info(
+                                'despublicar_ausentes — default_code=%s id_syscom=%s confirmado '
+                                'como descontinuado (404 en la API).',
+                                provider.default_code, provider.id_syscom,
+                            )
+                        continue  # este registro confirma; se revisan los demás del template
+                    _logger.warning(
+                        'despublicar_ausentes — default_code=%s id_syscom=%s: error HTTP al '
+                        'confirmar (%s); no se despublica por esta corrida.',
+                        provider.default_code, provider.id_syscom, e,
+                    )
+                    confirmado_descontinuado = False
+                    break
+                except Exception as e:
+                    _logger.warning(
+                        'despublicar_ausentes — default_code=%s id_syscom=%s: no se pudo confirmar '
+                        'vía API (%s); no se despublica por esta corrida.',
+                        provider.default_code, provider.id_syscom, e,
+                    )
+                    confirmado_descontinuado = False
+                    break
+
+            if confirmado_descontinuado:
+                tmpl_ids_a_despublicar.append(tmpl_id)
+                codigos_despublicados.extend(providers.mapped('default_code'))
+
+        if not tmpl_ids_a_despublicar:
+            return 0
+
+        self.env['product.template'].browse(tmpl_ids_a_despublicar).write({'is_published': False})
+        if var._logger_info:
+            _logger.info(
+                'despublicar_ausentes — completado despublicados=%d codigos=%s',
+                len(tmpl_ids_a_despublicar), codigos_despublicados,
+            )
+        return len(tmpl_ids_a_despublicar)
 
     def _sincronizar_descripcion_ecommerce(self, tmpl_ids) -> int:
         """Actualiza product.template.description_ecommerce con la ficha de

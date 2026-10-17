@@ -38,6 +38,7 @@
                             <!-- MEJORA-46: tasa_cambio visible solo cuando se activa conversión USD→MXN -->
                             <field name="tasa_cambio"
                                    invisible="not usd_a_mxn"/>
+                            <field name="dias_ausencia_maxima"/>
                         </group>
                     </group>
                     <notebook>
@@ -55,6 +56,9 @@
                                         <li>La descripción eCommerce de los productos publicados se actualiza
                                             automáticamente al final de cada importación, siempre que el archivo
                                             de token Bearer de Syscom esté montado (ver /mnt/DATA/token.dat)</li>
+                                        <li>Si no hay filtro de categorías activo, los productos publicados que
+                                            lleven más de "Días máximos de ausencia" sin aparecer en el CSV se
+                                            despublican automáticamente (tras confirmarlo contra la API de Syscom)</li>
                                     </ul>
                                 </p>
                             </group>

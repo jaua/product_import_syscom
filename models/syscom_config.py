@@ -64,6 +64,18 @@ class SyscomConfig(models.Model):
         default=1.0,
         help='Último respaldo manual: se usa solo si el CSV no incluye tipo de cambio Y la moneda USD no está configurada en el sistema Odoo.'
     )
+    dias_ausencia_maxima = fields.Integer(
+        string='Días máximos de ausencia',
+        default=15,
+        required=True,
+        help='Si un producto lleva más de este número de días sin aparecer en el CSV '
+             'de Syscom, se despublica de la tienda web — tras confirmarlo contra la '
+             'API de ficha de producto (ver README.md), para no despublicar por una '
+             'falla externa prolongada del CSV. No aplica si hay un filtro de '
+             'categorías activo (categorias_importar): no hay forma de distinguir '
+             '"descontinuado" de "fuera del filtro".'
+    )
+
     @api.model
     def get_config(self):
         """Obtener la configuración activa"""

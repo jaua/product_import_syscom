@@ -79,6 +79,15 @@ class ProductProviderSyscom(models.Model):
         string="Última actualización",
     )
 
+    ultima_vez_visto = fields.Datetime(
+        string="Última vez visto en el CSV",
+        default=fields.Datetime.now,
+        help="Última vez que este código apareció en el CSV de Syscom. Se usa "
+             "para detectar productos descontinuados: si lleva más de "
+             "syscom.config.dias_ausencia_maxima sin aparecer, el template se "
+             "despublica (tras confirmarlo contra la API de ficha de producto)."
+    )
+
     active = fields.Boolean(
         default=True
     )
