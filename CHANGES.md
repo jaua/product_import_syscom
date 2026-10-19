@@ -7,6 +7,14 @@ El 4to (patch) solo sube para un hotfix sobre una revisión ya entregada. El 2do
 módulo) solo sube ante un cambio que rompe compatibilidad hacia atrás (p. ej. quitar un campo
 o cambiar su significado, forzando una migración manual).
 
+## [Pendiente de versión] — 2026-10-19 (revisión 22)
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 72 | `models/syscom_config.py`, `models/syscom_importador.py`, `views/syscom_config_views.xml` | Nuevo campo computado `version_modulo` (`ir.module.module.latest_version`), mostrado en la pestaña "Información" de la pantalla de configuración de Syscom. Nuevo método compartido `_obtener_version_modulo()` en `syscom_config.py`, usado tanto por este campo como por el log de `ejecutar_importacion` (MEJORA-71) — antes el nombre técnico del módulo estaba repetido como literal en dos lugares |
+
 ## [Pendiente de versión] — 2026-10-19 (revisión 21)
 
 ### Mejoras de comportamiento

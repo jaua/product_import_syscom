@@ -20,6 +20,10 @@ var = Parametros()
 _logger = logging.getLogger(__name__)
 _logger.addFilter(FuncNameFilter())
 
+# Nombre técnico del módulo — usado para consultar su versión instalada
+# (ver _obtener_version_modulo). Único lugar donde vive este literal.
+_NOMBRE_MODULO = 'product_import_syscom'
+
 
 class SyscomConfig(models.Model):
     _name = 'syscom.config'
@@ -75,6 +79,26 @@ class SyscomConfig(models.Model):
              '(categorias_importar), solo se evalúan productos de esas categorías — '
              'el propósito del filtro es incluir, no excluir.'
     )
+    version_modulo = fields.Char(
+        string='Versión del módulo',
+        compute='_compute_version_modulo',
+        help='Versión instalada de este módulo (ir.module.module.latest_version). '
+             'La misma versión se registra en el log de Odoo al inicio de cada '
+             'ejecución — ver ejecutar_importacion en syscom_importador.py.'
+    )
+
+    def _compute_version_modulo(self):
+        for record in self:
+            record.version_modulo = record._obtener_version_modulo()
+
+    def _obtener_version_modulo(self) -> str:
+        """Versión instalada de este módulo, consultada vía ir.module.module
+        (no leída directamente del __manifest__.py: así refleja lo que Odoo
+        realmente tiene registrado como instalado/actualizado)."""
+        modulo = self.env['ir.module.module'].sudo().search(
+            [('name', '=', _NOMBRE_MODULO)], limit=1
+        )
+        return modulo.latest_version or 'desconocida'
 
     @api.model
     def get_config(self):

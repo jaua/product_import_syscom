@@ -44,6 +44,7 @@
                     <notebook>
                         <page string="Información">
                             <group>
+                                <field name="version_modulo" readonly="1"/>
                                 <p>
                                     <strong>Instrucciones de uso:</strong>
                                     <ul>
