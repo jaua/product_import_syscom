@@ -1,5 +1,13 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-10-19 (revisión 18)
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 70 | `models/product_provider_syscom.py`, `models/syscom_importador.py` | `_despublicar_productos_ausentes` (MEJORA-69) ya no se omite por completo cuando hay un filtro de categorías activo (`categorias_importar`). El propósito del filtro es incluir, no excluir, así que ahora solo se consideran candidatos cuyo `menu_nvl1` esté dentro del filtro. Nuevo campo `menu_nvl1` en `product.provider.syscom` (columna "Menu Nvl 1" del CSV, guardado ahí y no derivado de `product.template.categ_id`, para no depender del árbol de categorías de Odoo ni de si se corrió `homologar_categorias`), actualizado junto con `ultima_vez_visto`/`last_update` en el batch SQL. El resto de los guards (token Bearer, confirmación 404 vía API) no cambia — ese chequeo también cubre el caso de que Syscom haya movido el producto a una categoría fuera del filtro sin descontinuarlo |
+
 ## [Pendiente de versión] — 2026-10-17 (revisión 17)
 
 ### Mejoras de comportamiento

@@ -71,6 +71,15 @@ class ProductProviderSyscom(models.Model):
         default=False,
     )
 
+    # Cabezera: "Menu Nvl 1"
+    menu_nvl1 = fields.Char(
+        string="Categoría Syscom (Menu Nvl 1)",
+        help="Valor de la columna 'Menu Nvl 1' del CSV, guardado aquí (no derivado "
+             "de product.template.categ_id) para poder comparar contra "
+             "syscom.config.categorias_importar sin depender del árbol de "
+             "categorías de Odoo. Ver _despublicar_productos_ausentes."
+    )
+
     # ------------------------
     # Campos adicionales útiles
     # ------------------------

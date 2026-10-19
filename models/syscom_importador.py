@@ -553,6 +553,10 @@ class SyscomConfig(models.Model):
                     'syscom_url_imagen': syscom_url_imagen,
                     'syscom_inventory': syscom_inventory,
                     'es_kit': es_kit,
+                    # Guardado en nuestro propio modelo (no en product.category/categ_id de
+                    # Odoo) para poder comparar contra categorias_importar sin depender del
+                    # árbol de categorías — ver _despublicar_productos_ausentes.
+                    'menu_nvl1': menu_nvl1,
                     # 'syscom_obsoleto': syscom_obsoleto,
                 })
 
@@ -845,6 +849,7 @@ class SyscomConfig(models.Model):
                         'syscom_url': ldatos.get('syscom_url'),
                         'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
                         'es_kit': ldatos.get('es_kit'),
+                        'menu_nvl1': ldatos.get('menu_nvl1'),
                     }
                     tmpl_id = product.product_tmpl_id.id
                     d_tmpl_existencia[tmpl_id] = d_tmpl_existencia.get(tmpl_id, 0) + syscom_inventory
@@ -865,6 +870,7 @@ class SyscomConfig(models.Model):
                         'syscom_url': ldatos.get('syscom_url'),
                         'syscom_url_imagen': ldatos.get('syscom_url_imagen'),
                         'es_kit': ldatos.get('es_kit'),
+                        'menu_nvl1': ldatos.get('menu_nvl1'),
                     })
                     d_tmpl_existencia[tmpl_id] = d_tmpl_existencia.get(tmpl_id, 0) + syscom_inventory
                 contador_productos_procesados += 1
@@ -1090,6 +1096,7 @@ class SyscomConfig(models.Model):
                     vals.get('syscom_url'),
                     vals.get('syscom_url_imagen'),
                     vals.get('es_kit'),
+                    vals.get('menu_nvl1'),
                     ahora,
                     ahora,
                     record_id,
@@ -1098,8 +1105,8 @@ class SyscomConfig(models.Model):
             ]
             sql = """UPDATE product_provider_syscom
                         SET syscom_inventory=%s, syscom_url=%s,
-                            syscom_url_imagen=%s, es_kit=%s, last_update=%s,
-                            ultima_vez_visto=%s
+                            syscom_url_imagen=%s, es_kit=%s, menu_nvl1=%s,
+                            last_update=%s, ultima_vez_visto=%s
                       WHERE id=%s"""
             procesados = 0
             for i in range(0, total, chunk_size):
@@ -1115,7 +1122,7 @@ class SyscomConfig(models.Model):
             providers = self.env['product.provider.syscom'].browse(ids)
             providers.invalidate_recordset([
                 'syscom_inventory', 'syscom_url', 'syscom_url_imagen', 'last_update', 'es_kit',
-                'ultima_vez_visto',
+                'ultima_vez_visto', 'menu_nvl1',
             ])
             # product.template.product_url_ref/product_url_image son campos
             # computados desde estos registros; el UPDATE anterior fue SQL directo
@@ -1188,10 +1195,13 @@ class SyscomConfig(models.Model):
         descontinuación), no uno presente con existencia 0.
 
         Guards (para evitar despublicar por un falso positivo):
-          - Se omite por completo si hay un filtro de categorías activo
-            (categorias_importar): un producto fuera del filtro nunca aparece en
-            el CSV aunque Syscom siga vendiéndolo — no hay forma de distinguir
-            "descontinuado" de "fuera del filtro".
+          - Si hay un filtro de categorías activo (categorias_importar), solo se
+            consideran candidatos cuyo `menu_nvl1` (guardado en
+            product.provider.syscom, no derivado de categ_id — ver ese campo)
+            esté en el filtro. El propósito del filtro es incluir, no excluir:
+            un producto fuera del filtro nunca aparece en el CSV aunque Syscom
+            siga vendiéndolo, así que no se evalúa como ausente; uno dentro del
+            filtro que deja de aparecer sí es una señal válida.
           - Se omite si no hay token Bearer disponible (leer_token_bearer).
           - Un template con varios product.provider.syscom solo se despublica si
             NINGUNO fue visto recientemente (todos vencidos).
@@ -1199,32 +1209,40 @@ class SyscomConfig(models.Model):
             solo un 404 explícito confirma la descontinuación. Si la API
             responde 200 (sigue existiendo) o la llamada falla (red, token
             inválido, 5xx), NO se despublica — "no se pudo confirmar" nunca
-            cuenta como "confirmado ausente". Esto evita que una falla externa
-            prolongada del CSV (que haría que todo el catálogo cruce el umbral
-            de días a la vez) despublique el catálogo completo.
+            cuenta como "confirmado ausente". Esto cubre también el caso de que
+            Syscom haya movido el producto a una categoría fuera del filtro sin
+            descontinuarlo: la API lo seguiría confirmando con 200.
         Returns:
             int: Número de templates despublicados.
         """
-        if self.categorias_importar:
-            if var._logger_info:
-                _logger.info(
-                    'despublicar_ausentes — omitido: hay un filtro de categorías activo '
-                    '(categorias_importar); no se puede distinguir descontinuado de '
-                    'fuera-de-filtro.'
-                )
-            return 0
-
         token = leer_token_bearer()
         if not token:
             if var._logger_info:
                 _logger.info('despublicar_ausentes — omitido: no se pudo obtener el token Bearer.')
             return 0
 
+        categorias_filtro = []
+        if self.categorias_importar:
+            categorias_filtro = [
+                cat.strip().strip('"').strip("'")
+                for cat in self.categorias_importar.split(',')
+            ]
+
         limite = fields.Datetime.now() - timedelta(days=self.dias_ausencia_maxima)
 
         # Templates publicados cuyos registros de proveedor syscom están TODOS
-        # vencidos (ninguno visto en los últimos dias_ausencia_maxima días).
-        self.env.cr.execute("""
+        # vencidos (ninguno visto en los últimos dias_ausencia_maxima días). Si
+        # hay filtro de categorías, además se exige que al menos un registro
+        # tenga menu_nvl1 dentro del filtro — si no, no se puede saber si el
+        # producto está ausente o simplemente fuera del alcance de la importación.
+        if categorias_filtro:
+            condicion_filtro = "AND COUNT(*) FILTER (WHERE pts.menu_nvl1 = ANY(%s)) > 0"
+            params = (limite, categorias_filtro)
+        else:
+            condicion_filtro = ""
+            params = (limite,)
+
+        self.env.cr.execute(f"""
             SELECT pts.product_tmpl_id
               FROM product_provider_syscom pts
               JOIN product_template pt ON pt.id = pts.product_tmpl_id
@@ -1233,7 +1251,8 @@ class SyscomConfig(models.Model):
             HAVING COUNT(*) FILTER (
                      WHERE pts.ultima_vez_visto IS NOT NULL AND pts.ultima_vez_visto >= %s
                    ) = 0
-        """, (limite,))
+                   {condicion_filtro}
+        """, params)
         tmpl_ids_candidatos = [row[0] for row in self.env.cr.fetchall()]
         if not tmpl_ids_candidatos:
             return 0
