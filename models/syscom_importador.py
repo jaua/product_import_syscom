@@ -48,6 +48,13 @@ class SyscomConfig(models.Model):
     def ejecutar_importacion(self, desde_cron=False):
         """Ejecutar el proceso de importación manualmente"""
         self.ensure_one()
+        modulo = self.env['ir.module.module'].sudo().search(
+            [('name', '=', 'product_import_syscom')], limit=1
+        )
+        _logger.info(
+            'Syscom: iniciando ejecución (desde_cron=%s) — versión del módulo: %s',
+            desde_cron, modulo.latest_version or 'desconocida',
+        )
         # BUG-52: lock a nivel de transacción — una sola instancia concurrente
         self.env.cr.execute("SELECT pg_try_advisory_xact_lock(%s)", (_SYSCOM_LOCK_KEY,))
         if not self.env.cr.fetchone()[0]:

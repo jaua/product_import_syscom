@@ -7,6 +7,14 @@ El 4to (patch) solo sube para un hotfix sobre una revisión ya entregada. El 2do
 módulo) solo sube ante un cambio que rompe compatibilidad hacia atrás (p. ej. quitar un campo
 o cambiar su significado, forzando una migración manual).
 
+## [Pendiente de versión] — 2026-10-19 (revisión 21)
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 71 | `models/syscom_importador.py` | `ejecutar_importacion` registra en el log de Odoo, al comienzo de cada ejecución (manual o desde cron), la versión actual del módulo instalada (`ir.module.module.latest_version`) junto con `desde_cron` — útil para saber qué versión corrió ante cualquier incidencia, sin tener que revisar el manifest por separado |
+
 ## [Pendiente de versión] — 2026-10-19 (revisión 20)
 
 ### Proceso
