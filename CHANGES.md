@@ -1,5 +1,20 @@
 # Control de Cambios — Syscom Importador de Productos
 
+**Convención de versión** (desde 2026-10-19): `{serie_odoo}.{mayor}.{minor}.{patch}`,
+ej. `18.0.1.19.0`. El 3er número (minor) se mantiene igual al contador de "revisión N"
+de este archivo — así la versión del `__manifest__.py` y el changelog nunca se desincronizan.
+El 4to (patch) solo sube para un hotfix sobre una revisión ya entregada. El 2do (mayor del
+módulo) solo sube ante un cambio que rompe compatibilidad hacia atrás (p. ej. quitar un campo
+o cambiar su significado, forzando una migración manual).
+
+## [Pendiente de versión] — 2026-10-19 (revisión 20)
+
+### Proceso
+
+| Archivo | Descripción |
+|---------|-------------|
+| `__manifest__.py` | Adoptado el formato de versión descrito arriba. Version bumpeada de `1.0.6` a `18.0.1.20.0` (minor = esta misma revisión) |
+
 ## [Pendiente de versión] — 2026-10-19 (revisión 19)
 
 ### Documentación y consistencia

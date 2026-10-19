@@ -3,7 +3,7 @@
 # ===========================
 {
     'name': 'Syscom Importador de productos',
-    'version': '1.0.6',
+    'version': '18.0.1.20.0',
     'category': 'Sales',
     'summary': 'Importación automática de productos desde Syscom',
     'description': """
