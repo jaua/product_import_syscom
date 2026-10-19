@@ -1,5 +1,18 @@
 # Control de Cambios — Syscom Importador de Productos
 
+## [Pendiente de versión] — 2026-10-19 (revisión 19)
+
+### Documentación y consistencia
+
+| Archivo | Descripción |
+|---------|-------------|
+| `CHANGES.md` | Restaurado el encabezado de la revisión 9 (2026-08-29): se había perdido al insertar la revisión 10 (reemplazado en vez de insertado antes), dejando los bugs 56-59 de esa revisión real huérfanos bajo el título "revisión 10" |
+| `models/syscom_config.py`, `models/syscom_importador.py`, `views/syscom_config_views.xml` | Tres lugares seguían diciendo que la despublicación por ausencia "se omite si hay filtro de categorías activo" — obsoleto desde la revisión 18 (ahora se restringe a esas categorías, no se omite): `help` de `dias_ausencia_maxima`, comentario en `_procesar_csv`, instrucciones visibles en la vista |
+| `models/syscom_importador.py` | Docstring del módulo actualizado (no mencionaba despublicación por ausencia ni sincronización de `description_ecommerce`); `Args` de `_actualizar_syscom_provider_sql_batch` actualizado (no mencionaba `es_kit`/`menu_nvl1`) |
+| `__manifest__.py` | `description` describía el módulo como era hace ~15 revisiones; actualizada con el estado actual de funcionalidades |
+| `README.md` | La sección de instalación del token Bearer solo mencionaba `description_ecommerce`; el token también gatea la confirmación de `_despublicar_productos_ausentes` (MEJORA-69/70) |
+| `models/syscom_log.py`, `models/product_provider_syscom.py` | Imports sin uso eliminados (`logging`/`_logger` remanente de BUG-33; `api` nunca usado) |
+
 ## [Pendiente de versión] — 2026-10-19 (revisión 18)
 
 ### Mejoras de comportamiento
@@ -74,7 +87,9 @@
 | 64 | `models/product_provider_syscom.py`, `models/syscom_config.py` | Nuevo campo `es_kit` en `product.provider.syscom`, poblado desde la columna "Es Kit" del CSV de Syscom. Se escribe tanto en la creación (ORM) como en la actualización en batch (SQL directo) de registros de proveedor |
 | 65 | `models/syscom_config.py`, `__manifest__.py` | Nuevo método `_actualizar_publicacion_web_batch`: despublica de la tienda web (`is_published=False`) los `product.template` cuya existencia total reportada en el CSV de la importación actual es 0, sumando existencia entre todos sus registros de proveedor syscom (`d_tmpl_existencia`, devuelto por `_clasificar_syscom_provider`). Solo actúa sobre templates presentes en el CSV; nunca publica automáticamente — un template con existencia > 0 conserva su estado de publicación actual, ya que publicar sigue siendo decisión manual. Requiere la nueva dependencia `website_sale` (campo `is_published`) |
 
+---
 
+## [Pendiente de versión] — 2026-08-29 (revisión 9)
 
 ### Bugs corregidos
 

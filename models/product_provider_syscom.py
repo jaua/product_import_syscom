@@ -1,4 +1,4 @@
-from odoo import models, fields, api
+from odoo import models, fields
 
 # Tabla de almacenamiento de la información en el csv que se importa
 # no todos los campos, pero los que nos interesan.

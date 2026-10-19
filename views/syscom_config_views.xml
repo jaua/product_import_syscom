@@ -56,9 +56,10 @@
                                         <li>La descripción eCommerce de los productos publicados se actualiza
                                             automáticamente al final de cada importación, siempre que el archivo
                                             de token Bearer de Syscom esté montado (ver /mnt/DATA/token.dat)</li>
-                                        <li>Si no hay filtro de categorías activo, los productos publicados que
-                                            lleven más de "Días máximos de ausencia" sin aparecer en el CSV se
-                                            despublican automáticamente (tras confirmarlo contra la API de Syscom)</li>
+                                        <li>Los productos publicados que lleven más de "Días máximos de ausencia"
+                                            sin aparecer en el CSV se despublican automáticamente (tras confirmarlo
+                                            contra la API de Syscom); si hay filtro de categorías, solo aplica a
+                                            productos dentro de esas categorías</li>
                                     </ul>
                                 </p>
                             </group>

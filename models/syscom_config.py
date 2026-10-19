@@ -71,9 +71,9 @@ class SyscomConfig(models.Model):
         help='Si un producto lleva más de este número de días sin aparecer en el CSV '
              'de Syscom, se despublica de la tienda web — tras confirmarlo contra la '
              'API de ficha de producto (ver README.md), para no despublicar por una '
-             'falla externa prolongada del CSV. No aplica si hay un filtro de '
-             'categorías activo (categorias_importar): no hay forma de distinguir '
-             '"descontinuado" de "fuera del filtro".'
+             'falla externa prolongada del CSV. Si hay un filtro de categorías activo '
+             '(categorias_importar), solo se evalúan productos de esas categorías — '
+             'el propósito del filtro es incluir, no excluir.'
     )
 
     @api.model

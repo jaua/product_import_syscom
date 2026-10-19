@@ -4,10 +4,12 @@
 # ===========================
 """Proceso de importación de productos desde Syscom: descarga/limpieza de
 CSV, clasificación, actualización/creación en batch de product.template y
-product.provider.syscom, despublicación web por existencia, bitácora y
-homologación de categorías. Extiende syscom.config (definido en
-syscom_config.py, que solo guarda los campos de configuración) para que
-ambos archivos sigan siendo el mismo modelo ORM.
+product.provider.syscom, despublicación web (por existencia 0 o por ausencia
+prolongada del CSV, esta última confirmada contra la API de Syscom),
+sincronización de description_ecommerce, bitácora y homologación de
+categorías. Extiende syscom.config (definido en syscom_config.py, que solo
+guarda los campos de configuración) para que ambos archivos sigan siendo el
+mismo modelo ORM.
 """
 from odoo import models, fields, api
 from odoo.exceptions import UserError
@@ -445,7 +447,8 @@ class SyscomConfig(models.Model):
             # Despublica productos que llevan más de dias_ausencia_maxima días sin
             # aparecer en el CSV (posible descontinuación) — distinto del caso
             # anterior: ese producto ni siquiera está en los datos de esta corrida.
-            # Se omite si hay filtro de categorías activo (ver docstring del método).
+            # Si hay filtro de categorías activo, se restringe a esas categorías
+            # (ver docstring del método).
             self._despublicar_productos_ausentes()
 
             # Actualiza description_ecommerce (modelo + características) desde la
@@ -1074,7 +1077,8 @@ class SyscomConfig(models.Model):
         la ejecución — este último confirma que el código apareció en el
         CSV de esta corrida (ver _despublicar_productos_ausentes).
         Args:
-            productos_actualizar (dict): {record_id: {syscom_inventory, syscom_url, syscom_url_imagen}}
+            productos_actualizar (dict): {record_id: {syscom_inventory, syscom_url,
+                syscom_url_imagen, es_kit, menu_nvl1}}
         Returns:
             int: Número de registros actualizados.
         """
