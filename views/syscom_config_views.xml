@@ -39,6 +39,7 @@
                             <field name="tasa_cambio"
                                    invisible="not usd_a_mxn"/>
                             <field name="dias_ausencia_maxima"/>
+                            <field name="dias_retencion_bitacora_publicaciones"/>
                         </group>
                     </group>
                     <notebook>
@@ -61,6 +62,9 @@
                                             sin aparecer en el CSV se despublican automáticamente (tras confirmarlo
                                             contra la API de Syscom); si hay filtro de categorías, solo aplica a
                                             productos dentro de esas categorías</li>
+                                        <li>Cada despublicación automática queda registrada en la "Bitácora de
+                                            Publicaciones"; "Días de retención" define cuánto se conservan esos
+                                            registros (0 o negativo = indefinido)</li>
                                     </ul>
                                 </p>
                             </group>

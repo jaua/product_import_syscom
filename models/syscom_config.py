@@ -79,6 +79,15 @@ class SyscomConfig(models.Model):
              '(categorias_importar), solo se evalúan productos de esas categorías — '
              'el propósito del filtro es incluir, no excluir.'
     )
+    dias_retencion_bitacora_publicaciones = fields.Integer(
+        string='Días de retención — bitácora de publicaciones',
+        default=180,
+        required=True,
+        help='Los registros de syscom.publicacion.log (despublicaciones automáticas, '
+             'ver dias_ausencia_maxima y existencia 0) más antiguos que este número de '
+             'días se eliminan al final de cada importación. Un valor 0 o negativo '
+             'desactiva la limpieza — se conservan indefinidamente.'
+    )
     version_modulo = fields.Char(
         string='Versión del módulo',
         compute='_compute_version_modulo',

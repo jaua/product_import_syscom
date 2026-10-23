@@ -3,7 +3,7 @@
 # ===========================
 {
     'name': 'Syscom Importador de productos',
-    'version': '18.0.1.22.0',
+    'version': '18.0.1.23.0',
     'category': 'Sales',
     'summary': 'Importación automática de productos desde Syscom',
     'description': """
@@ -15,6 +15,8 @@
         - Despublicación web automática por existencia 0 o por ausencia prolongada
           del CSV (confirmada contra la API de ficha de producto de Syscom)
         - Sincronización de la descripción eCommerce desde esa misma API
+        - Bitácora de publicaciones/despublicaciones automáticas, con
+          retención configurable
         - Homologación de categorías a la jerarquía Todos/All
     """,
     'author': 'JAUA SyTI',
@@ -25,6 +27,7 @@
         'security/ir.model.access.csv',
         'views/syscom_config_views.xml',
         'views/syscom_log_views.xml',
+        'views/syscom_publicacion_log_views.xml',
         'views/product_template_views.xml',
         'views/menu_views.xml',
         'data/ir_cron_data.xml',

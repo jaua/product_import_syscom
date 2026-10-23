@@ -470,6 +470,7 @@ class SyscomConfig(models.Model):
             )
             # Revisar la generacion de las bitacoras
             bitacora_limpiar_revisar()
+            self._limpiar_bitacora_publicaciones()
         except Exception as e:
             _logger.error(f'Error procesando CSV: {str(e)}')
             raise UserError(f'Error al procesar el archivo CSV: {str(e)}')
@@ -1151,13 +1152,54 @@ class SyscomConfig(models.Model):
             return self._actualizar_syscom_provider_individual(productos_actualizar)
         return total
 
+    def _registrar_publicacion_log(self, templates, motivo, detalle=None):
+        """Crea un registro en syscom.publicacion.log por cada template en
+        `templates` que este módulo acaba de despublicar automáticamente.
+        Args:
+            templates: recordset de product.template ya despublicados.
+            motivo (str): uno de los valores de syscom.publicacion.log.motivo.
+            detalle (str, opcional): contexto adicional para el registro.
+        """
+        if not templates:
+            return
+        vals_list = [{
+            'product_tmpl_id': template.id,
+            'default_code': template.default_code,
+            'motivo': motivo,
+            'detalle': detalle,
+        } for template in templates]
+        self.env['syscom.publicacion.log'].create(vals_list)
+
+    def _limpiar_bitacora_publicaciones(self) -> int:
+        """Elimina registros de syscom.publicacion.log más antiguos que
+        `dias_retencion_bitacora_publicaciones` días. Un valor 0 o negativo
+        desactiva la limpieza (retención indefinida).
+        Returns:
+            int: número de registros eliminados.
+        """
+        dias = self.dias_retencion_bitacora_publicaciones
+        if dias <= 0:
+            return 0
+        limite = fields.Datetime.now() - timedelta(days=dias)
+        registros_viejos = self.env['syscom.publicacion.log'].search([('fecha', '<', limite)])
+        total = len(registros_viejos)
+        if total:
+            registros_viejos.unlink()
+            if var._logger_info:
+                _logger.info(
+                    'bitacora_publicaciones — eliminados %d registros anteriores a %s (retención=%d días)',
+                    total, limite, dias,
+                )
+        return total
+
     def _actualizar_publicacion_web_batch(self, existencia_por_template) -> int:
         """Despublica en la tienda web (product.template.is_published=False) los
         templates cuya existencia reportada en esta importación es 0. Nunca
         publica automáticamente: un template con existencia > 0 no se toca y
         conserva su estado de publicación actual (la publicación es una
         decisión manual). Sólo se consideran los templates presentes en el
-        CSV de esta importación.
+        CSV de esta importación. Cada despublicación queda registrada en
+        syscom.publicacion.log (motivo='existencia_cero').
         Args:
             existencia_por_template (dict): {product_tmpl_id: existencia_total}
         Returns:
@@ -1193,6 +1235,11 @@ class SyscomConfig(models.Model):
             templates = self.env['product.template']
             for tmpl_id in tmpl_ids_sin_existencia:
                 templates.browse(tmpl_id).write({'is_published': False})
+
+        self._registrar_publicacion_log(
+            self.env['product.template'].browse(tmpl_ids_sin_existencia),
+            motivo='existencia_cero',
+        )
         return total
 
     def _despublicar_productos_ausentes(self) -> int:
@@ -1220,6 +1267,9 @@ class SyscomConfig(models.Model):
             cuenta como "confirmado ausente". Esto cubre también el caso de que
             Syscom haya movido el producto a una categoría fuera del filtro sin
             descontinuarlo: la API lo seguiría confirmando con 200.
+
+        Cada despublicación queda registrada en syscom.publicacion.log
+        (motivo='ausencia_confirmada').
         Returns:
             int: Número de templates despublicados.
         """
@@ -1320,7 +1370,13 @@ class SyscomConfig(models.Model):
         if not tmpl_ids_a_despublicar:
             return 0
 
-        self.env['product.template'].browse(tmpl_ids_a_despublicar).write({'is_published': False})
+        templates_despublicados = self.env['product.template'].browse(tmpl_ids_a_despublicar)
+        templates_despublicados.write({'is_published': False})
+        self._registrar_publicacion_log(
+            templates_despublicados,
+            motivo='ausencia_confirmada',
+            detalle=f'Ausente > {self.dias_ausencia_maxima} días, confirmado 404 en la API',
+        )
         if var._logger_info:
             _logger.info(
                 'despublicar_ausentes — completado despublicados=%d codigos=%s',

@@ -18,6 +18,13 @@
     action="action_syscom_log"
     sequence="2"/>
 
+<!-- Submenú de Bitácora de Publicaciones -->
+<menuitem id="menu_syscom_publicacion_log"
+    name="Bitácora de Publicaciones"
+    parent="menu_syscom_root"
+    action="action_syscom_publicacion_log"
+    sequence="3"/>
+
 <menuitem id="menu_syscom_root_sale"
     name="Proveedor Syscom"
     parent="sale.menu_sale_config"

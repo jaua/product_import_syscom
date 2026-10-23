@@ -7,6 +7,15 @@ El 4to (patch) solo sube para un hotfix sobre una revisión ya entregada. El 2do
 módulo) solo sube ante un cambio que rompe compatibilidad hacia atrás (p. ej. quitar un campo
 o cambiar su significado, forzando una migración manual).
 
+## [Pendiente de versión] — 2026-10-23 (revisión 23)
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 73 | `models/syscom_publicacion_log.py` (nuevo), `security/ir.model.access.csv`, `views/syscom_publicacion_log_views.xml` (nuevo), `views/menu_views.xml` | Nueva "Bitácora de Publicaciones" (`syscom.publicacion.log`), análoga a la Bitácora de Importaciones. Alcance acotado a propósito: registra únicamente las despublicaciones automáticas de este módulo (`_actualizar_publicacion_web_batch` → `motivo='existencia_cero'`, `_despublicar_productos_ausentes` → `motivo='ausencia_confirmada'`) — el módulo nunca publica por sí mismo, así que no hay eventos de "publicado" por ahora; el campo `evento` queda listo para ese caso si se agrega en el futuro. `default_code` se guarda como foto del momento (no related), para que el registro histórico sobreviva aunque el producto cambie o se elimine después |
+| 74 | `models/syscom_config.py`, `models/syscom_importador.py` | Nuevo campo `dias_retencion_bitacora_publicaciones` en `syscom.config` (default 180 días; 0 o negativo = retención indefinida). Nuevo `_limpiar_bitacora_publicaciones()`, llamado al final de `_procesar_csv` junto a `bitacora_limpiar_revisar()`: elimina registros de `syscom.publicacion.log` más antiguos que ese umbral |
+
 ## [Pendiente de versión] — 2026-10-19 (revisión 22)
 
 ### Mejoras de comportamiento
