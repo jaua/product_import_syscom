@@ -21,8 +21,20 @@
                             icon="fa-sitemap"
                             groups="base.group_system"
                             confirm="Esto migrará las categorías de TODOS los productos a la jerarquía Todos/All y eliminará las categorías obsoletas. ¿Continuar?"/>
+                    <!-- MEJORA-75: da por revisadas las categorías nuevas del último CSV -->
+                    <button name="action_marcar_categorias_revisadas"
+                            string="Marcar categorías como revisadas"
+                            type="object"
+                            icon="fa-check"
+                            groups="base.group_system"
+                            invisible="not alerta_categorias"/>
                 </header>
                 <sheet>
+                    <!-- MEJORA-75: filtros sin coincidencia / categorías nuevas del CSV -->
+                    <div class="alert alert-warning" role="alert" invisible="not alerta_categorias">
+                        <strong>Revise el filtro de categorías:</strong>
+                        <field name="alerta_categorias" readonly="1" nolabel="1"/>
+                    </div>
                     <group>
                         <group string="Configuración de Descarga">
                             <field name="syscom_url_csv" placeholder="https://ejemplo.syscom.mx/productos.csv"/>

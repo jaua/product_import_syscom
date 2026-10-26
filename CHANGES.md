@@ -7,6 +7,21 @@ El 4to (patch) solo sube para un hotfix sobre una revisión ya entregada. El 2do
 módulo) solo sube ante un cambio que rompe compatibilidad hacia atrás (p. ej. quitar un campo
 o cambiar su significado, forzando una migración manual).
 
+## [Pendiente de versión] — 2026-10-25 (revisión 24)
+
+### Bugs corregidos
+
+| #  | Archivo | Descripción | Severidad |
+|----|---------|-------------|-----------|
+| 67 | `models/syscom_importador.py` | Cuando Syscom cambia el Modelo de un producto sin cambiar su ID Producto (ej. `ARCHERAX12` → `ARCHER-AX12`), la clasificación por `default_code` creaba un `product.template` duplicado y el `create` de su `product.provider.syscom` fallaba en cada corrida por `unique(id_syscom, partner_id)` (44 casos en el log). Nuevo `_renombrar_codigos_cambiados()`, llamado en `_procesar_csv` antes de clasificar: si un `id_syscom` ya registrado llega con otro código, renombra el template existente (y el `product_code` de su tarifa de proveedor Syscom) en vez de duplicarlo. Si el código nuevo ya pertenece a otro template (duplicado heredado), o el código viejo sigue en el CSV con otro `id_syscom` (el template le pertenece a ese otro producto), no renombra: lo registra en `syscom.log` como "Duplicados por Cambio de Modelo" y `_clasificar_syscom_provider` omite ese `id_syscom` en lugar de intentar el INSERT | Alta |
+| 68 | `models/syscom_config.py`, `models/syscom_importador.py` | `categorias_importar` se partía con `split(',')` ignorando las comillas: `"Herramientas, Ferretería y Material Eléctrico"` se convertía en dos filtros que nunca coincidían (≈2,460 productos del CSV ignorados). Nuevo `parsear_categorias()` que lo lee como línea CSV, usado en `_procesar_csv` y `_despublicar_productos_ausentes` | Alta |
+
+### Mejoras de comportamiento
+
+| #  | Archivo | Descripción |
+|----|---------|-------------|
+| 75 | `models/syscom_config.py`, `models/syscom_importador.py`, `views/syscom_config_views.xml` | Monitoreo de categorías en cada importación. (1) La comparación del filtro contra "Menu Nvl 1" se normaliza (`normalizar_categoria`: espacios repetidos y mayúsculas) en `_leer_csv` y en el SQL de `_despublicar_productos_ausentes` — Syscom cambió p. ej. `"Detección  de Fuego"` a `"Detección de Fuego"`. (2) `_leer_csv` cuenta todas las categorías del CSV; `_actualizar_monitoreo_categorias` las guarda en `categorias_csv_ultima`. (3) Nuevo campo almacenado `alerta_categorias` (computado): filtros sin coincidencia en el CSV (con sugerencia por similitud, `difflib`) y categorías nuevas aún no revisadas (`categorias_csv_conocidas`, inicializado en la primera corrida). (4) Si hay alerta: `syscom.log` tipo "Alerta Categorías" y warning en el log en cada corrida; aviso fijo (`sticky`) al terminar una importación manual; banner en el formulario de configuración y botón "Marcar categorías como revisadas" |
+
 ## [Pendiente de versión] — 2026-10-23 (revisión 23)
 
 ### Mejoras de comportamiento

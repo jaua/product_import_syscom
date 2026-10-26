@@ -19,8 +19,11 @@ from .bitacora_precios import registrar_bitacora_precios, bitacora_limpiar_revis
 from .syscom_api import leer_token_bearer, obtener_ficha_producto, formatear_descripcion_ecommerce
 from .logging_utils import FuncNameFilter
 from .syscom_parametros import SyscomParametros as Parametros
+from .syscom_config import normalizar_categoria, parsear_categorias
+from collections import Counter
 import requests
 import csv
+import json
 import os
 import logging
 import shutil
@@ -128,6 +131,20 @@ class SyscomConfig(models.Model):
             self._procesar_csv(archivo_ruta)
 
             self._limpiar_archivos_antiguos(archivo_ruta)
+
+            if self.alerta_categorias:
+                # MEJORA-75: aviso fijo para que no pase desapercibido; el detalle
+                # queda también en el formulario de configuración y en la bitácora.
+                return {
+                    'type': 'ir.actions.client',
+                    'tag': 'display_notification',
+                    'params': {
+                        'title': 'Importación completada con alertas de categorías',
+                        'message': self.alerta_categorias,
+                        'type': 'warning',
+                        'sticky': True,
+                    }
+                }
 
             return {
                 'type': 'ir.actions.client',
@@ -378,16 +395,12 @@ class SyscomConfig(models.Model):
         Parametros:
             ruta_archivo (str): Ruta del archivo CSV a procesar.
         """
-        categorias_filtro = []
         self.ensure_one()
         if var._logger_info:
             _logger.info(f'Inicia procesado de CSV, desde archivo: {ruta_archivo_csv}')
 
-        if self.categorias_importar:
-            categorias_filtro = [
-                cat.strip().strip('"').strip("'")
-                for cat in self.categorias_importar.split(',')
-            ]
+        # BUG-68 / MEJORA-75: parseo respetando comillas y comparación normalizada.
+        categorias_filtro = {normalizar_categoria(c) for c in parsear_categorias(self.categorias_importar)}
 
         # 1. Buscar o Crear el Proveedor (Partner)
         datos_proveedor = self.env['res.partner'].search([
@@ -419,7 +432,15 @@ class SyscomConfig(models.Model):
                 datos_syscom_proveedor,
                 tipo_cambio_csv,
                 codigos_procesados,
+                conteo_categorias_csv,
             ) = self._leer_csv(ruta_archivo_csv, categorias_filtro, datos_proveedor.id)
+            self._actualizar_monitoreo_categorias(conteo_categorias_csv)
+
+            # BUG-67: debe correr antes de clasificar para que los productos con
+            # Modelo cambiado se actualicen en lugar de duplicarse.
+            ids_syscom_conflicto = self._renombrar_codigos_cambiados(
+                datos_syscom_proveedor, datos_proveedor.id
+            )
 
             (
                 d_productos_actualizar,
@@ -437,7 +458,9 @@ class SyscomConfig(models.Model):
                 l_prod_syscom_crear_vals,
                 prod_syscom_procesados,
                 d_tmpl_existencia,
-            ) = self._clasificar_syscom_provider(datos_syscom_proveedor, codigos_procesados)
+            ) = self._clasificar_syscom_provider(
+                datos_syscom_proveedor, codigos_procesados, ids_syscom_conflicto
+            )
 
             # MEJORA-36: reemplazado actualización individual por SQL batch (equivalente al de product.template)
             provider_actualizados = self._actualizar_syscom_provider_sql_batch(d_prod_syscom_actualizar)
@@ -477,9 +500,14 @@ class SyscomConfig(models.Model):
 
     def _leer_csv(self, ruta_archivo, categorias_filtro, syscom_provider_id) -> tuple:
         """Lee el archivo CSV y extrae los datos necesarios para la importación.
+        Args:
+            categorias_filtro (set): categorías a importar, ya normalizadas con
+              normalizar_categoria; vacío importa todo.
         Returns:
-            tuple: Una tupla con las filas de datos, el tipo de cambio y los códigos a procesar.
+            tuple: Una tupla con las filas de datos, el tipo de cambio, los códigos a
+              procesar y un Counter {Menu Nvl 1: filas} de todo el CSV (sin filtrar).
         """
+        conteo_categorias_csv = Counter()
         datos_syscom_product = []
         datos_syscom_provider = []
         tipo_cambio_csv = None
@@ -498,8 +526,9 @@ class SyscomConfig(models.Model):
             for fila_datos_csv in lector_csv:
                 contador_de_lineas_csv += 1
                 menu_nvl1 = fila_datos_csv.get('Menu Nvl 1', '').strip()
+                conteo_categorias_csv[menu_nvl1] += 1
 
-                if (categorias_filtro and menu_nvl1 not in categorias_filtro):
+                if categorias_filtro and normalizar_categoria(menu_nvl1) not in categorias_filtro:
                     continue
 
                 default_code = fila_datos_csv.get('Modelo', '').strip()
@@ -580,9 +609,22 @@ class SyscomConfig(models.Model):
         resultados = (datos_syscom_product,
                       datos_syscom_provider,
                       tipo_cambio_csv,
-                      lista_codigos_procesados)
+                      lista_codigos_procesados,
+                      conteo_categorias_csv)
 
         return resultados
+
+    def _actualizar_monitoreo_categorias(self, conteo_categorias_csv) -> None:
+        """MEJORA-75: guarda las categorías del CSV para que alerta_categorias
+        (computado en syscom_config.py) detecte filtros sin coincidencia y
+        categorías nuevas. En la primera ejecución todas se dan por revisadas,
+        para no reportar el catálogo completo como "nuevo"."""
+        self.categorias_csv_ultima = json.dumps(dict(conteo_categorias_csv), ensure_ascii=False)
+        if not self.categorias_csv_conocidas:
+            self.action_marcar_categorias_revisadas()
+        if self.alerta_categorias:
+            _logger.warning('Alerta de categorías Syscom:\n%s', self.alerta_categorias)
+            self._registrar_log(descripcion=self.alerta_categorias, tipo_operacion='Alerta Categorías')
 
     def _tasa_efectiva(self, tipo_cambio_csv):
         """BUG-53: prioridad de tasa de cambio: CSV → sistema Odoo → UI del módulo."""
@@ -645,6 +687,85 @@ class SyscomConfig(models.Model):
         marca_id = marca_id.id
         marca_cache[nombre_marca] = marca_id
         return marca_id
+
+    def _renombrar_codigos_cambiados(self, datos_syscom_provider, partner_id) -> set:
+        """BUG-67: Syscom a veces cambia el Modelo (default_code) de un producto sin
+        cambiar su ID Producto (ej. ARCHERAX12 → ARCHER-AX12). Como la clasificación
+        busca por default_code, el producto se duplicaba y el registro de
+        product.provider.syscom del nuevo fallaba por unique(id_syscom, partner_id).
+
+        Antes de clasificar, se detectan los id_syscom ya registrados cuyo código
+        cambió en el CSV y se renombra el product.template existente (el
+        default_code de product.provider.syscom es related y se actualiza solo).
+
+        Si el código nuevo ya pertenece a otro product.template (duplicado creado
+        por versiones anteriores), o el código viejo sigue en el CSV con otro
+        id_syscom, no se renombra: se requiere limpieza manual.
+
+        Returns:
+            set: id_syscom en conflicto, para que _clasificar_syscom_provider no
+              intente crear su registro de proveedor.
+        """
+        codigos_por_id = {}
+        for ldatos in datos_syscom_provider:
+            id_syscom = ldatos.get('id_syscom')
+            if id_syscom:
+                codigos_por_id.setdefault(id_syscom, set()).add(ldatos['default_code'])
+        # Un id_syscom con varios códigos en el mismo CSV es ambiguo: no se toca.
+        codigo_nuevo_por_id = {i: next(iter(c)) for i, c in codigos_por_id.items() if len(c) == 1}
+        codigos_csv = {ldatos['default_code'] for ldatos in datos_syscom_provider}
+
+        registros = self.env['product.provider.syscom'].search([
+            ('partner_id', '=', partner_id),
+            ('id_syscom', 'in', list(codigo_nuevo_por_id)),
+        ])
+        cambiados = registros.filtered(
+            lambda r: r.default_code != codigo_nuevo_por_id[r.id_syscom]
+        )
+        if not cambiados:
+            return set()
+
+        codigos_nuevos = [codigo_nuevo_por_id[r.id_syscom] for r in cambiados]
+        ocupados = set(self.env['product.template'].with_context(active_test=False).search(
+            [('default_code', 'in', codigos_nuevos)]
+        ).mapped('default_code'))
+
+        renombrados = []
+        conflictos = []
+        ids_conflicto = set()
+        for registro in cambiados:
+            codigo_viejo = registro.default_code
+            codigo_nuevo = codigo_nuevo_por_id[registro.id_syscom]
+            # Si el código viejo sigue en el CSV (con otro id_syscom), el template le
+            # pertenece a ese otro producto: renombrarlo se lo quitaría.
+            if codigo_nuevo in ocupados or codigo_viejo in codigos_csv:
+                conflictos.append((registro.id_syscom, codigo_viejo, codigo_nuevo))
+                ids_conflicto.add(registro.id_syscom)
+                continue
+            plantilla = registro.product_tmpl_id
+            plantilla.write({'default_code': codigo_nuevo})
+            plantilla.seller_ids.filtered(
+                lambda s: s.partner_id.id == partner_id and s.product_code == codigo_viejo
+            ).write({'product_code': codigo_nuevo})
+            renombrados.append((registro.id_syscom, codigo_viejo, codigo_nuevo))
+
+        if renombrados:
+            _logger.info('Códigos renombrados por cambio de Modelo en Syscom: %s', renombrados)
+            self._registrar_log(
+                descripcion=f'{len(renombrados)} productos renombrados (id_syscom, anterior, nuevo): {renombrados}',
+                tipo_operacion='Códigos Renombrados',
+            )
+        if conflictos:
+            _logger.warning(
+                'Productos duplicados por cambio de Modelo en Syscom, requieren limpieza manual '
+                '(id_syscom, código en proveedor, código nuevo ya existente): %s', conflictos,
+            )
+            self._registrar_log(
+                descripcion=f'{len(conflictos)} productos duplicados por cambio de Modelo '
+                            f'(id_syscom, anterior, nuevo): {conflictos}',
+                tipo_operacion='Duplicados por Cambio de Modelo',
+            )
+        return ids_conflicto
 
     def _clasificar_syscom_product(self, datos_syscom_product, codigos_a_procesar) -> tuple:
         """Clasifica los productos en dos grupos: los que se deben actualizar.
@@ -741,7 +862,8 @@ class SyscomConfig(models.Model):
             productos_procesados += 1
         return d_productos_actualizar, l_productos_crear_vals, productos_procesados
 
-    def _clasificar_syscom_provider(self, datos_syscom_proveedor=None, codigos_a_procesar=None) -> tuple:
+    def _clasificar_syscom_provider(self, datos_syscom_proveedor=None, codigos_a_procesar=None,
+                                    ids_syscom_conflicto=None) -> tuple:
         """Clasifica registros de proveedor Syscom en dos grupos: actualizar y crear.
         Returns:
             tuple: (dict actualizar, list crear, int procesados, dict {product_tmpl_id: existencia_total})
@@ -751,6 +873,9 @@ class SyscomConfig(models.Model):
 
         if codigos_a_procesar is None:
             codigos_a_procesar = []
+
+        if ids_syscom_conflicto is None:
+            ids_syscom_conflicto = set()
 
         if var._logger_info:
             _logger.info('Clasificando productos de proveedor syscom...')
@@ -861,6 +986,11 @@ class SyscomConfig(models.Model):
                     }
                     tmpl_id = product.product_tmpl_id.id
                     d_tmpl_existencia[tmpl_id] = d_tmpl_existencia.get(tmpl_id, 0) + syscom_inventory
+                elif id_syscom in ids_syscom_conflicto:
+                    # BUG-67: el id_syscom ya está registrado en otro producto (duplicado
+                    # por cambio de Modelo); crearlo violaría unique(id_syscom, partner_id).
+                    contador_omitidos += 1
+                    continue
                 else:
                     tmpl_id = producto_template_default_code_id_map.get(default_code)
                     if not tmpl_id:
@@ -1279,12 +1409,8 @@ class SyscomConfig(models.Model):
                 _logger.info('despublicar_ausentes — omitido: no se pudo obtener el token Bearer.')
             return 0
 
-        categorias_filtro = []
-        if self.categorias_importar:
-            categorias_filtro = [
-                cat.strip().strip('"').strip("'")
-                for cat in self.categorias_importar.split(',')
-            ]
+        # BUG-68 / MEJORA-75: misma normalización que _leer_csv (ver normalizar_categoria).
+        categorias_filtro = [normalizar_categoria(c) for c in parsear_categorias(self.categorias_importar)]
 
         limite = fields.Datetime.now() - timedelta(days=self.dias_ausencia_maxima)
 
@@ -1294,7 +1420,10 @@ class SyscomConfig(models.Model):
         # tenga menu_nvl1 dentro del filtro — si no, no se puede saber si el
         # producto está ausente o simplemente fuera del alcance de la importación.
         if categorias_filtro:
-            condicion_filtro = "AND COUNT(*) FILTER (WHERE pts.menu_nvl1 = ANY(%s)) > 0"
+            condicion_filtro = (
+                "AND COUNT(*) FILTER (WHERE regexp_replace(lower(btrim(pts.menu_nvl1)), '\\s+', ' ', 'g')"
+                " = ANY(%s)) > 0"
+            )
             params = (limite, categorias_filtro)
         else:
             condicion_filtro = ""

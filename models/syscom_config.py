@@ -14,11 +14,38 @@ from odoo.exceptions import UserError
 from datetime import datetime, timedelta
 from .logging_utils import FuncNameFilter
 from .syscom_parametros import SyscomParametros as Parametros
+import csv
+import difflib
+import json
 import logging
 
 var = Parametros()
 _logger = logging.getLogger(__name__)
 _logger.addFilter(FuncNameFilter())
+
+# Valores de "Menu Nvl 1" en el CSV que no son categorías reales (productos sin
+# ficha completa); se excluyen del monitoreo de categorías.
+_CATEGORIAS_PLACEHOLDER = {'', '---'}
+
+
+def normalizar_categoria(nombre) -> str:
+    """MEJORA-75: clave de comparación de categorías tolerante a cambios menores
+    de Syscom (espacios dobles, mayúsculas). Debe coincidir con la normalización
+    SQL de _despublicar_productos_ausentes: regexp_replace(lower(btrim(x)), '\\s+', ' ', 'g')."""
+    return ' '.join((nombre or '').split()).lower()
+
+
+def parsear_categorias(texto) -> list:
+    """BUG-68: categorias_importar se partía con split(',') ignorando las comillas,
+    por lo que "Herramientas, Ferretería y Material Eléctrico" se convertía en dos
+    filtros que nunca coincidían. Se parsea como una línea CSV (respeta comillas
+    dobles); los saltos de línea cuentan como separador."""
+    if not texto:
+        return []
+    fila = next(csv.reader([texto.replace('\n', ',')], skipinitialspace=True), [])
+    categorias = [c.strip().strip("'").strip() for c in fila]
+    return [c for c in categorias if c]
+
 
 # Nombre técnico del módulo — usado para consultar su versión instalada
 # (ver _obtener_version_modulo). Único lugar donde vive este literal.
@@ -50,7 +77,10 @@ class SyscomConfig(models.Model):
     )
     categorias_importar = fields.Text(
         string='Lista de categorías a importar',
-        help='Categorías separadas por comas y delimitadas por comillas. Dejar vacío para importar todo.'
+        help='Categorías separadas por comas y delimitadas por comillas, como aparecen en la '
+             'columna "Menu Nvl 1" del CSV (se ignoran mayúsculas y espacios repetidos). '
+             'Dejar vacío para importar todo. Si alguna deja de coincidir con el CSV, se '
+             'muestra una alerta en este formulario y en la bitácora.'
     )
     ganancia_porcentaje = fields.Float(
         string='Ganancia (%)',
@@ -88,6 +118,25 @@ class SyscomConfig(models.Model):
              'días se eliminan al final de cada importación. Un valor 0 o negativo '
              'desactiva la limpieza — se conservan indefinidamente.'
     )
+    # MEJORA-75: monitoreo de categorías del CSV contra categorias_importar.
+    categorias_csv_ultima = fields.Text(
+        string='Categorías del último CSV',
+        readonly=True,
+        help='JSON {categoría: productos} con los valores de "Menu Nvl 1" del último CSV procesado.'
+    )
+    categorias_csv_conocidas = fields.Text(
+        string='Categorías revisadas',
+        readonly=True,
+        help='JSON con las categorías del CSV ya revisadas. Se inicializa en la primera '
+             'importación y se actualiza con el botón "Marcar categorías como revisadas".'
+    )
+    alerta_categorias = fields.Text(
+        string='Alerta de categorías',
+        compute='_compute_alerta_categorias',
+        store=True,
+        help='Filtros de categorias_importar que no coinciden con ninguna categoría del '
+             'último CSV, y categorías nuevas del CSV aún no revisadas.'
+    )
     version_modulo = fields.Char(
         string='Versión del módulo',
         compute='_compute_version_modulo',
@@ -95,6 +144,52 @@ class SyscomConfig(models.Model):
              'La misma versión se registra en el log de Odoo al inicio de cada '
              'ejecución — ver ejecutar_importacion en syscom_importador.py.'
     )
+
+    @api.depends('categorias_importar', 'categorias_csv_ultima', 'categorias_csv_conocidas')
+    def _compute_alerta_categorias(self):
+        for record in self:
+            record.alerta_categorias = record._texto_alerta_categorias() or False
+
+    def _texto_alerta_categorias(self) -> str:
+        """Compara el filtro y las categorías revisadas contra las del último CSV."""
+        self.ensure_one()
+        if not self.categorias_csv_ultima:
+            return ''
+        conteo = {
+            nombre: n for nombre, n in json.loads(self.categorias_csv_ultima).items()
+            if normalizar_categoria(nombre) not in _CATEGORIAS_PLACEHOLDER
+        }
+        nombre_por_clave = {normalizar_categoria(nombre): nombre for nombre in conteo}
+        lineas = []
+
+        sin_coincidencia = []
+        for filtro in parsear_categorias(self.categorias_importar):
+            if normalizar_categoria(filtro) in nombre_por_clave:
+                continue
+            parecida = difflib.get_close_matches(
+                normalizar_categoria(filtro), list(nombre_por_clave), n=1, cutoff=0.5
+            )
+            sugerencia = f' (¿"{nombre_por_clave[parecida[0]]}"?)' if parecida else ''
+            sin_coincidencia.append(f'"{filtro}"{sugerencia}')
+        if sin_coincidencia:
+            lineas.append('Filtros sin coincidencia en el CSV (no se importa nada de ellos): '
+                          + ', '.join(sin_coincidencia))
+
+        conocidas = {normalizar_categoria(c) for c in json.loads(self.categorias_csv_conocidas or '[]')}
+        nuevas = [
+            f'"{nombre}" ({n} productos)' for nombre, n in sorted(conteo.items(), key=lambda x: -x[1])
+            if normalizar_categoria(nombre) not in conocidas
+        ]
+        if nuevas:
+            lineas.append('Categorías nuevas en el CSV, sin revisar: ' + ', '.join(nuevas))
+        return '\n'.join(lineas)
+
+    def action_marcar_categorias_revisadas(self):
+        """Da por revisadas las categorías del último CSV: dejan de reportarse como nuevas."""
+        for record in self:
+            record.categorias_csv_conocidas = json.dumps(
+                sorted(json.loads(record.categorias_csv_ultima or '{}')), ensure_ascii=False
+            )
 
     def _compute_version_modulo(self):
         for record in self:
